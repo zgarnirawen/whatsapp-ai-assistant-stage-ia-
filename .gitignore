@@ -1,0 +1,35 @@
+# Dependencies
+**/node_modules/
+
+# Backend
+backend/dist/
+backend/generated/
+backend/.env
+backend/.env.*
+
+# Frontend / Expo
+frontend/.expo/
+frontend/dist/
+frontend/web-build/
+frontend/expo-env.d.ts
+frontend/.env
+frontend/.env.*
+
+# Local environment files
+.env
+.env.*
+!.env.example
+.env*.local
+
+# OS / tooling
+.DS_Store
+*.tsbuildinfo
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+*.orig.*
+*.pem
+*.jks
+*.p12
+*.key
+*.mobileprovision
