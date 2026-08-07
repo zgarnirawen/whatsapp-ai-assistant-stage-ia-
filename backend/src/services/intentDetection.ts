@@ -19,6 +19,7 @@ export type DetectedIntent =
 
 export interface IntentResult {
   intent: DetectedIntent;
+  language?: "fr" | "en";
   taskTitle?: string;
   eventTitle?: string;
   eventDateTime?: string;
@@ -43,9 +44,28 @@ const tools: Groq.Chat.Completions.ChatCompletionTool[] = [
         properties: {
           intent: {
             type: "string",
-            enum: ["create_task", "create_event", "summarize_period", "unrecognized"],
+            enum: [
+              "create_task",
+              "create_event",
+              "summarize_period",
+              "modify_task",
+              "delete_task",
+              "modify_event",
+              "delete_event",
+              "greeting",
+              "farewell",
+              "thanks",
+              "small_talk",
+              "capabilities",
+              "unrecognized",
+            ],
             description:
-              "The detected intent. Use 'unrecognized' if the message doesn't clearly match any supported action.",
+              "The detected intent. Use 'unrecognized' only for genuinely off-topic requests (weather, general knowledge, gibberish).",
+          },
+          language: {
+            type: "string",
+            enum: ["fr", "en"],
+            description: "The language the user's message is written in, detected from the wording itself",
           },
 
           taskTitle: {
@@ -99,7 +119,7 @@ summaryDates: {
     "Only for summarize_period, when the user mentions multiple SPECIFIC non-contiguous days (e.g. 'demain et hier', 'lundi et mercredi'). List each date in ISO format (YYYY-MM-DD). Do NOT use this for a single continuous range like 'cette semaine' — use summaryPeriodStart/End for that instead. If summaryDates is used, leave summaryPeriodStart/End empty.",
 },
         },
-        required: ["intent"],
+        required: ["intent", "language"],
       },
     },
   },
@@ -115,33 +135,41 @@ export async function detectIntent(inputText: string): Promise<IntentResult> {
         role: "system",
         content: `You are an intent classifier for a voice/text assistant embedded in a productivity app (tasks, agenda, calls, files). Today's date is ${today} (${new Date().toLocaleDateString('fr-FR', { weekday: 'long' })}).
 
-When the user refers to "cette semaine" (this week), the range MUST include today and MUST NOT be entirely in the past. Interpret "cette semaine" as Monday through Sunday of the CURRENT week that contains today's date — never a past week. Double check: today's date must fall within or before the end of the computed range.
+      When the user refers to "cette semaine" (this week), the range MUST include today and MUST NOT be entirely in the past. Interpret "cette semaine" as Monday through Sunday of the CURRENT week that contains today's date — never a past week. Double check: today's date must fall within or before the end of the computed range.
 
-Be GENEROUS and FLEXIBLE in matching intent — real users speak casually, with typos, missing words, and varied phrasing (especially via voice-to-text). Do not require exact or grammatically perfect phrasing. Focus on the underlying meaning, not exact wording.,
-Examples of phrasings that should all map to "summarize_period":
-- "resume moi mes taches"
-- "resume mes taches"
-- "resume ma semaine"
-- "fais moi un resume"
-- "qu'est-ce que j'ai cette semaine"
-- "montre moi mon planning"
+      Be GENEROUS and FLEXIBLE in matching intent — real users speak casually, with typos, missing words, and varied phrasing (especially via voice-to-text). Do not require exact or grammatically perfect phrasing. Focus on the underlying meaning, not exact wording.
 
-Examples that should map to "create_task":
-- "cree une tache pour X"
-- "ajoute une tache X"
-- "n'oublie pas de X"
-- "il faut que je X"
+      Map user messages to these intents when appropriate:
+      - "greeting": brief salutations such as "bonjour", "salut", "coucou", "hey". Reply with a friendly welcome but do not treat as an error.
+      - "farewell": goodbyes like "au revoir", "bye", "à plus".
+      - "thanks": expressions of gratitude such as "merci", "merci beaucoup".
+      - "small_talk": casual conversational phrases not related to tasks/agenda, e.g. "ça va ?", "comment tu vas ?", or brief chit-chat. These are NOT "unrecognized"; classify them as "small_talk".
+      - "capabilities": user asking what the assistant can do, e.g. "qu'est-ce que tu sais faire", "aide-moi", "comment ça marche". Classify as "capabilities".
 
-Examples that should map to "create_event":
-- "programme un rdv avec X"
-- "ajoute un rendez-vous X"
-- "bloque du temps pour X"
-- "modify_task" / "delete_task": user wants to change or remove an existing task (e.g. "modifie la tâche X", "supprime la tâche X", "annule la tâche X"). Extract targetTitleQuery (what they called it) and, for modify, newTaskTitle if given.
-- "modify_event" / "delete_event": same for events/appointments.
+      Examples of phrasings that should map to "summarize_period":
+      - "resume moi mes taches"
+      - "resume mes taches"
+      - "resume ma semaine"
+      - "fais moi un resume"
+      - "qu'est-ce que j'ai cette semaine"
+      - "montre moi mon planning"
 
-Only use "unrecognized" when the message is genuinely unrelated to tasks/agenda/summaries (e.g. greetings, small talk, gibberish, or requests clearly outside scope like weather or general knowledge questions).
+      Examples that should map to "create_task":
+      - "cree une tache pour X"
+      - "ajoute une tache X"
+      - "n'oublie pas de X"
+      - "il faut que je X"
 
-Always call the classify_intent function with your best classification.`,
+      Examples that should map to "create_event":
+      - "programme un rdv avec X"
+      - "ajoute un rendez-vous X"
+      - "bloque du temps pour X"
+
+      Examples for modify/delete intents: user wants to change or remove an existing task/event (e.g. "modifie la tâche X", "supprime la tâche X", "annule la tâche X"). Extract "targetTitleQuery" and possible new titles/datetimes when present.
+
+      Only use "unrecognized" when the message is genuinely unrelated to the assistant's scope (weather requests, general knowledge questions, or gibberish). Do NOT map greetings, thanks, small talk, or capability-questions to "unrecognized".
+
+      Always call the classify_intent function with your best classification.`,
       },
       {
         role: "user",

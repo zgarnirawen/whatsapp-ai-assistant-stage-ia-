@@ -6,6 +6,7 @@ import {
   ScrollView,
   StyleSheet,
   ActivityIndicator,
+  Platform,
 } from 'react-native';
 import { useState, useCallback, useRef } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -26,7 +27,7 @@ import {
   IBMPlexSans_600SemiBold,
 } from '@expo-google-fonts/ibm-plex-sans';
 
-const API_BASE_URL = 'http://10.224.58.5:3000';
+const API_BASE_URL = Platform.OS === 'web' ? 'http://localhost:3000' : 'http://10.224.58.5:3000';
 
 const colors = {
   bg: '#F6F3EC',
@@ -47,6 +48,7 @@ interface ChatMessage {
   role: 'user' | 'assistant';
   text: string;
   time: string;
+  variant?: 'normal' | 'error';
 }
 
 interface ProposedAction {
@@ -55,6 +57,82 @@ interface ProposedAction {
   details: any;
   targetId?: string | null;
   requiresValidation: boolean;
+  language?: Lang;
+}
+
+type Lang = 'fr' | 'en';
+
+type ClarificationState = {
+  pendingAction: ProposedAction;
+  targetTitle: string;
+  lang: Lang;
+  missingField: 'newTaskTitle' | 'newEventTitle';
+};
+
+const UI_TEXT = {
+  fr: {
+    createTaskConfirm: (title: string) => `Créer la tâche "${title}" ?`,
+    createEventConfirm: (title: string, dateLabel: string) =>
+      `Créer l'événement "${title}"${dateLabel ? ` le ${dateLabel}` : ''} ?`.replace(/\s+/g, ' ').trim(),
+    deleteTaskConfirm: (title: string) => `Supprimer la tâche "${title}" ?`,
+    deleteEventConfirm: (title: string) => `Supprimer l'événement "${title}" ?`,
+    modifyTaskConfirm: (target: string, nextTitle: string) => `Renommer la tâche "${target}" en "${nextTitle}" ?`,
+    modifyTaskClarify: (target: string) => `Quel nouveau nom souhaitez-vous donner à la tâche "${target}" ?`,
+    modifyEventConfirm: (target: string, nextTitle: string) => `Modifier l'événement "${target}" en "${nextTitle}" ?`,
+    modifyEventClarify: (target: string) => `Quel nouveau nom souhaitez-vous donner à l'événement "${target}" ?`,
+    notFound: (query: string) => `Aucune tâche ou aucun événement trouvé correspondant à "${query}".`,
+    ambiguous: (titles: string) => `Plusieurs éléments correspondent, précisez lequel :\n${titles}`,
+    summaryClarify: "Pour quelle période voulez-vous un résumé ? (ex : cette semaine, aujourd'hui...)",
+    summaryIntro: 'Résumé',
+    summaryNoTasks: 'aucune tâche trouvée.',
+    summaryNoEvents: 'aucun événement trouvé.',
+    summaryNoItems: 'aucune tâche ni événement trouvé.',
+    actionConfirmed: 'Action confirmée et exécutée.',
+    actionCancelled: 'Action annulée.',
+    actionFallback: 'Action traitée.',
+    audioError: "Désolé, je n'ai pas pu comprendre l'audio, réessaie ou tape ton message.",
+    serverError: 'Erreur de connexion au serveur.',
+  },
+  en: {
+    createTaskConfirm: (title: string) => `Create task "${title}"?`,
+    createEventConfirm: (title: string, dateLabel: string) =>
+      `Create event "${title}"${dateLabel ? ` on ${dateLabel}` : ''}?`.replace(/\s+/g, ' ').trim(),
+    deleteTaskConfirm: (title: string) => `Delete task "${title}"?`,
+    deleteEventConfirm: (title: string) => `Delete event "${title}"?`,
+    modifyTaskConfirm: (target: string, nextTitle: string) => `Rename task "${target}" to "${nextTitle}"?`,
+    modifyTaskClarify: (target: string) => `What would you like to rename '${target}' to?`,
+    modifyEventConfirm: (target: string, nextTitle: string) => `Change event "${target}" to "${nextTitle}"?`,
+    modifyEventClarify: (target: string) => `What would you like to rename the event '${target}' to?`,
+    notFound: (query: string) => `No task or event found matching "${query}".`,
+    ambiguous: (titles: string) => `Several items match, please specify which one:\n${titles}`,
+    summaryClarify: 'What period would you like a summary for? (e.g. this week, today...)',
+    summaryIntro: 'Summary',
+    summaryNoTasks: 'no tasks found.',
+    summaryNoEvents: 'no events found.',
+    summaryNoItems: 'no tasks or events found.',
+    actionConfirmed: 'Action confirmed and executed.',
+    actionCancelled: 'Action canceled.',
+    actionFallback: 'Action processed.',
+    audioError: "Sorry, I couldn't understand the audio. Try again or type your message.",
+    serverError: 'Server connection error.',
+  },
+} as const;
+
+function getLang(language?: string): Lang {
+  return language === 'en' ? 'en' : 'fr';
+}
+
+function formatLocalizedDate(dateTime: string | undefined, lang: Lang) {
+  if (!dateTime) return '';
+  const date = new Date(dateTime);
+  if (Number.isNaN(date.getTime())) return dateTime;
+  return date.toLocaleString(lang === 'fr' ? 'fr-FR' : 'en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 function formatTime(date: Date) {
@@ -84,10 +162,64 @@ export default function HomeScreen() {
   ]);
   const [inputText, setInputText] = useState('');
   const [pendingAction, setPendingAction] = useState<ProposedAction | null>(null);
+  const [pendingClarification, setPendingClarification] = useState<ClarificationState | null>(null);
   const [awaitingPeriodClarification, setAwaitingPeriodClarification] = useState<string | null>(null);
+  const [ttsEnabled, setTtsEnabled] = useState(true);
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
+
+  const speakAssistantResponse = useCallback(
+    (text: string, language: Lang = 'fr') => {
+      const speechText = text.trim();
+      if (!ttsEnabled || !speechText) {
+        return;
+      }
+
+      try {
+        Speech.stop();
+        Speech.speak(speechText, { language: language === 'en' ? 'en-US' : 'fr-FR' });
+      } catch (error) {
+        console.error('Failed to speak assistant response', error);
+      }
+    },
+    [ttsEnabled]
+  );
+
+  const addAssistantMessage = useCallback(
+    (text: string, options?: { variant?: 'normal' | 'error'; speak?: boolean; language?: Lang }) => {
+      const messageText = text.trim();
+      if (!messageText) {
+        return;
+      }
+
+      setMessages((previous) => [
+        ...previous,
+        {
+          id: Math.random().toString(),
+          role: 'assistant',
+          text: messageText,
+          time: formatTime(new Date()),
+          variant: options?.variant ?? 'normal',
+        },
+      ]);
+
+      if (options?.speak) {
+        speakAssistantResponse(messageText, options.language);
+      }
+    },
+    [speakAssistantResponse]
+  );
+
+  const toggleTts = () => {
+    setTtsEnabled((previous) => {
+      const nextEnabled = !previous;
+      if (!nextEnabled) {
+        Speech.stop();
+      }
+      return nextEnabled;
+    });
+  };
 const startRecording = async () => {
   try {
     if (recording) {
@@ -137,11 +269,22 @@ const handleMicPress = () => {
 const transcribeAndSend = async (uri: string) => {
   try {
     const formData = new FormData();
-    formData.append('audio', {
-      uri,
-      name: 'audio.m4a',
-      type: 'audio/m4a',
-    } as any);
+
+if (Platform.OS === "web") {
+  const blob = await fetch(uri).then(r => r.blob());
+
+  formData.append(
+    "audio",
+    blob,
+    "audio.webm" // or .wav depending on what Expo records
+  );
+} else {
+  formData.append("audio", {
+    uri,
+    name: "audio.m4a",
+    type: "audio/m4a",
+  } as any);
+}
 
     const response = await axios.post(`${API_BASE_URL}/assistant/transcribe`, formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
@@ -150,18 +293,64 @@ const transcribeAndSend = async (uri: string) => {
     const transcribedText = response.data.text?.trim();
     if (transcribedText) {
       setInputText(transcribedText);
-      // Send it through the normal flow, reusing existing sendMessage logic
-      setTimeout(() => sendMessage(), 100);
+      await sendMessage('voice', transcribedText);
+    } else {
+      addAssistantMessage(
+        "Désolé, je n'ai pas pu comprendre l'audio, réessaie ou tape ton message.",
+        { variant: 'error' }
+      );
     }
   } catch (error) {
     console.error('Transcription failed', error);
+    addAssistantMessage(
+      "Désolé, je n'ai pas pu comprendre l'audio, réessaie ou tape ton message.",
+      { variant: 'error' }
+    );
   }
 };
- const sendMessage = useCallback(async () => {
-    const text = inputText.trim();
+ const sendMessage = useCallback(async (inputMode: 'voice' | 'text', overrideText?: string) => {
+    const text = (overrideText ?? inputText).trim();
     if (!text) return;
 
     const normalizedText = text.toLowerCase();
+
+    if (pendingClarification) {
+      const userMessage: ChatMessage = {
+        id: Math.random().toString(),
+        role: 'user',
+        text,
+        time: formatTime(new Date()),
+      };
+      setMessages((previous) => [...previous, userMessage]);
+      setInputText('');
+
+      const clarifiedDetails = {
+        ...pendingClarification.pendingAction.details,
+        [pendingClarification.missingField]: text,
+      };
+      const clarifiedAction: ProposedAction = {
+        ...pendingClarification.pendingAction,
+        details: clarifiedDetails,
+      };
+
+      setPendingClarification(null);
+      setPendingAction(clarifiedAction);
+
+      if (clarifiedAction.intent === 'modify_task') {
+        const assistantText = UI_TEXT[pendingClarification.lang].modifyTaskConfirm(
+          pendingClarification.targetTitle,
+          text
+        );
+        addAssistantMessage(assistantText, { speak: true, language: pendingClarification.lang });
+      } else if (clarifiedAction.intent === 'modify_event') {
+        const assistantText = UI_TEXT[pendingClarification.lang].modifyEventConfirm(
+          pendingClarification.targetTitle,
+          text
+        );
+        addAssistantMessage(assistantText, { speak: true, language: pendingClarification.lang });
+      }
+      return;
+    }
 
     if (pendingAction) {
       if (AFFIRMATIVE_WORDS.includes(normalizedText)) {
@@ -210,40 +399,83 @@ const transcribeAndSend = async (uri: string) => {
     try {
       const response = await axios.post(`${API_BASE_URL}/assistant/message`, {
         inputText: effectiveText,
-        inputMode: 'text',
+        inputMode,
       });
 
       const { result, responseMessage, proposedAction } = response.data;
+      const detectedLanguage = getLang(result?.language);
 
       let assistantText = responseMessage;
 
       if (proposedAction) {
-  setPendingAction(proposedAction);
-  if (proposedAction.intent === 'create_task') {
-    assistantText = 'Creer la tache : "' + proposedAction.details.taskTitle + '" ?';
-  } else if (proposedAction.intent === 'create_event') {
-    assistantText =
-      "Creer l'evenement : \"" +
-      proposedAction.details.eventTitle +
-      '" le ' +
-      proposedAction.details.eventDateTime +
-      ' ?';
-  } else if (proposedAction.intent === 'delete_task') {
-    assistantText = 'Supprimer la tache : "' + response.data.modifyDeleteInfo.target.title + '" ?';
-  } else if (proposedAction.intent === 'delete_event') {
-    assistantText = "Supprimer l'evenement : \"" + response.data.modifyDeleteInfo.target.title + '" ?';
-  } else if (proposedAction.intent === 'modify_task') {
-    assistantText =
-      'Renommer la tache "' + response.data.modifyDeleteInfo.target.title + '" en "' + proposedAction.details.newTaskTitle + '" ?';
-  } else if (proposedAction.intent === 'modify_event') {
-    assistantText = "Modifier l'evenement \"" + response.data.modifyDeleteInfo.target.title + '" ?';
-  }
-} else if (response.data.modifyDeleteInfo?.status === 'not_found') {
-  assistantText = 'Aucune tache ou evenement trouve correspondant a "' + response.data.modifyDeleteInfo.query + '".';
-} else if (response.data.modifyDeleteInfo?.status === 'ambiguous') {
-  const titles = response.data.modifyDeleteInfo.matches.map((m: any) => '- ' + m.title).join('\n');
-  assistantText = 'Plusieurs elements correspondent, precisez lequel :\n' + titles;
-} else if (result?.intent === 'summarize_period') {
+        if (proposedAction.intent === 'create_task') {
+          setPendingAction({ ...proposedAction, language: detectedLanguage });
+          assistantText = UI_TEXT[detectedLanguage].createTaskConfirm(proposedAction.details.taskTitle);
+        } else if (proposedAction.intent === 'create_event') {
+          setPendingAction({ ...proposedAction, language: detectedLanguage });
+          assistantText = UI_TEXT[detectedLanguage].createEventConfirm(
+            proposedAction.details.eventTitle,
+            formatLocalizedDate(proposedAction.details.eventDateTime, detectedLanguage)
+          );
+        } else if (proposedAction.intent === 'delete_task') {
+          const targetTitle = response.data.modifyDeleteInfo?.target?.title;
+          if (!targetTitle) {
+            assistantText = UI_TEXT[detectedLanguage].notFound(response.data.modifyDeleteInfo?.query || '');
+          } else {
+            setPendingAction({ ...proposedAction, language: detectedLanguage });
+            assistantText = UI_TEXT[detectedLanguage].deleteTaskConfirm(targetTitle);
+          }
+        } else if (proposedAction.intent === 'delete_event') {
+          const targetTitle = response.data.modifyDeleteInfo?.target?.title;
+          if (!targetTitle) {
+            assistantText = UI_TEXT[detectedLanguage].notFound(response.data.modifyDeleteInfo?.query || '');
+          } else {
+            setPendingAction({ ...proposedAction, language: detectedLanguage });
+            assistantText = UI_TEXT[detectedLanguage].deleteEventConfirm(targetTitle);
+          }
+        } else if (proposedAction.intent === 'modify_task') {
+          const targetTitle = response.data.modifyDeleteInfo?.target?.title;
+          const newTitle = proposedAction.details?.newTaskTitle?.trim();
+          if (!targetTitle) {
+            assistantText = UI_TEXT[detectedLanguage].notFound(response.data.modifyDeleteInfo?.query || '');
+          } else if (!newTitle) {
+            setPendingAction(null);
+            setPendingClarification({
+              pendingAction: proposedAction,
+              targetTitle,
+              lang: detectedLanguage,
+              missingField: 'newTaskTitle',
+            });
+            assistantText = UI_TEXT[detectedLanguage].modifyTaskClarify(targetTitle);
+          } else {
+            setPendingAction({ ...proposedAction, language: detectedLanguage });
+            assistantText = UI_TEXT[detectedLanguage].modifyTaskConfirm(targetTitle, newTitle);
+          }
+        } else if (proposedAction.intent === 'modify_event') {
+          const targetTitle = response.data.modifyDeleteInfo?.target?.title;
+          const newTitle = proposedAction.details?.newEventTitle?.trim();
+          if (!targetTitle) {
+            assistantText = UI_TEXT[detectedLanguage].notFound(response.data.modifyDeleteInfo?.query || '');
+          } else if (!newTitle) {
+            setPendingAction(null);
+            setPendingClarification({
+              pendingAction: proposedAction,
+              targetTitle,
+              lang: detectedLanguage,
+              missingField: 'newEventTitle',
+            });
+            assistantText = UI_TEXT[detectedLanguage].modifyEventClarify(targetTitle);
+          } else {
+            setPendingAction({ ...proposedAction, language: detectedLanguage });
+            assistantText = UI_TEXT[detectedLanguage].modifyEventConfirm(targetTitle, newTitle);
+          }
+        }
+      } else if (response.data.modifyDeleteInfo?.status === 'not_found') {
+        assistantText = UI_TEXT[detectedLanguage].notFound(response.data.modifyDeleteInfo.query || '');
+      } else if (response.data.modifyDeleteInfo?.status === 'ambiguous') {
+        const titles = response.data.modifyDeleteInfo.matches.map((m: any) => '- ' + m.title).join('\n');
+        assistantText = UI_TEXT[detectedLanguage].ambiguous(titles);
+      } else if (result?.intent === 'summarize_period') {
   if (result.summaryDates && result.summaryDates.length > 0) {
     const byDate = response.data.summaryDataByDate || {};
     const parts = result.summaryDates.map((date: string) => {
@@ -261,7 +493,7 @@ const transcribeAndSend = async (uri: string) => {
         (eventCount > 0 ? '  Evenements:\n' + eventList : '')
       );
     });
-    assistantText = 'Resume :\n' + parts.join('\n\n');
+    assistantText = `${UI_TEXT[detectedLanguage].summaryIntro} :\n${parts.join('\n\n')}`;
   } else if (result.summaryPeriodStart && result.summaryPeriodEnd) {
     const periodLabel =
       result.summaryPeriodStart === result.summaryPeriodEnd
@@ -274,11 +506,11 @@ const transcribeAndSend = async (uri: string) => {
     if (taskCount === 0 && eventCount === 0) {
       const scopeLabel =
         response.data.summaryScope === 'tasks'
-          ? 'aucune tache trouvee.'
+          ? UI_TEXT[detectedLanguage].summaryNoTasks
           : response.data.summaryScope === 'events'
-          ? 'aucun evenement trouve.'
-          : 'aucune tache ni evenement trouve.';
-      assistantText = 'Resume ' + periodLabel + ' : ' + scopeLabel;
+          ? UI_TEXT[detectedLanguage].summaryNoEvents
+          : UI_TEXT[detectedLanguage].summaryNoItems;
+      assistantText = `${UI_TEXT[detectedLanguage].summaryIntro} ${periodLabel} : ${scopeLabel}`;
     } else {
       const taskList = (response.data.summaryData?.tasks || [])
         .map((t: any) => '- ' + t.title)
@@ -287,36 +519,22 @@ const transcribeAndSend = async (uri: string) => {
         .map((e: any) => '- ' + e.title + ' (' + e.dateTime + ')')
         .join('\n');
       assistantText =
-        'Resume ' + periodLabel + ' :\n' +
-        (taskCount > 0 ? 'Taches:\n' + taskList + '\n' : '') +
-        (eventCount > 0 ? 'Evenements:\n' + eventList : '');
+        `${UI_TEXT[detectedLanguage].summaryIntro} ${periodLabel} :\n` +
+        (taskCount > 0 ? `${detectedLanguage === 'fr' ? 'Tâches' : 'Tasks'}:\n${taskList}\n` : '') +
+        (eventCount > 0 ? `${detectedLanguage === 'fr' ? 'Événements' : 'Events'}:\n${eventList}` : '');
     }
   } else {
-    assistantText = 'Pour quelle periode voulez-vous un resume ? (ex: cette semaine, aujourd\'hui...)';
+    assistantText = UI_TEXT[detectedLanguage].summaryClarify;
     setAwaitingPeriodClarification(text);
   }
 }
 
-      const assistantMessage: ChatMessage = {
-        id: Math.random().toString(),
-        role: 'assistant',
-        text: assistantText || 'Action traitee.',
-        time: formatTime(new Date()),
-      };
-      setMessages((previous) => [...previous, assistantMessage]);
+      addAssistantMessage(assistantText || UI_TEXT[detectedLanguage].actionFallback, { speak: true, language: detectedLanguage });
     } catch (error) {
       console.error(error);
-      setMessages((previous) => [
-        ...previous,
-        {
-          id: Math.random().toString(),
-          role: 'assistant',
-          text: 'Erreur de connexion au serveur.',
-          time: formatTime(new Date()),
-        },
-      ]);
+      addAssistantMessage(UI_TEXT.fr.serverError, { variant: 'error', speak: true, language: 'fr' });
     }
-  }, [inputText, awaitingPeriodClarification]);
+  }, [inputText, awaitingPeriodClarification, addAssistantMessage]);
 
   const handleValidate = async () => {
   if (!pendingAction) return;
@@ -327,18 +545,23 @@ const transcribeAndSend = async (uri: string) => {
       details: pendingAction.details,
       targetId: pendingAction.targetId,
     });
-      setMessages((previous) => [
-        ...previous,
-        {
-          id: Math.random().toString(),
-          role: 'assistant',
-          text: 'Action confirmee et executee.',
-          time: formatTime(new Date()),
-        },
-      ]);
+      addAssistantMessage(
+        pendingAction.language === 'en' ? UI_TEXT.en.actionConfirmed : UI_TEXT.fr.actionConfirmed,
+        { speak: true, language: pendingAction.language || 'fr' }
+      );
       setPendingAction(null);
     } catch (error) {
       console.error(error);
+      addAssistantMessage(
+        pendingAction.language === 'en'
+          ? "Sorry, I couldn't complete the requested action."
+          : "Désolé, je n'ai pas pu exécuter l'action demandée.",
+        {
+        variant: 'error',
+          speak: true,
+          language: pendingAction.language || 'fr',
+        }
+      );
     }
   };
 
@@ -348,7 +571,7 @@ const transcribeAndSend = async (uri: string) => {
       {
         id: Math.random().toString(),
         role: 'assistant',
-        text: 'Action annulee.',
+        text: pendingAction?.language === 'en' ? UI_TEXT.en.actionCancelled : UI_TEXT.fr.actionCancelled,
         time: formatTime(new Date()),
       },
     ]);
@@ -370,8 +593,13 @@ const transcribeAndSend = async (uri: string) => {
           <Text style={styles.appbarTitle}>Assistant</Text>
           <Text style={styles.appbarSub}>A l'ecoute</Text>
         </View>
-        <View style={styles.iconBtn}>
-          <Feather name="more-horizontal" size={18} color="#fff" />
+        <View style={styles.headerActions}>
+          <TouchableOpacity style={styles.iconBtn} onPress={toggleTts}>
+            <Feather name={ttsEnabled ? 'volume-2' : 'volume-x'} size={18} color="#fff" />
+          </TouchableOpacity>
+          <View style={styles.iconBtn}>
+            <Feather name="more-horizontal" size={18} color="#fff" />
+          </View>
         </View>
       </View>
 
@@ -388,9 +616,22 @@ const transcribeAndSend = async (uri: string) => {
               <Text style={styles.titleLine}>{m.text}</Text>
             </View>
           ) : (
-            <View key={m.id} style={[styles.card, styles.assistantCard]}>
+            <View
+              key={m.id}
+              style={[
+                styles.card,
+                styles.assistantCard,
+                m.variant === 'error' && styles.errorAssistantCard,
+              ]}>
               <Text style={[styles.subLine, { color: colors.tealDeep }]}>Assistant</Text>
-              <Text style={[styles.titleLine, styles.assistantTitleLine]}>{m.text}</Text>
+              <Text
+                style={[
+                  styles.titleLine,
+                  styles.assistantTitleLine,
+                  m.variant === 'error' && styles.errorAssistantTitleLine,
+                ]}>
+                {m.text}
+              </Text>
             </View>
           )
         )}
@@ -400,23 +641,35 @@ const transcribeAndSend = async (uri: string) => {
     <TouchableOpacity style={styles.checkRow} onPress={handleValidate}>
       <View style={styles.checkbox} />
       <Text style={styles.checkRowText}>
-        Oui,{' '}
-        {pendingAction.intent === 'create_task'
-          ? 'creer la tache'
-          : pendingAction.intent === 'create_event'
-          ? "creer l'evenement"
-          : pendingAction.intent === 'delete_task'
-          ? 'supprimer la tache'
-          : pendingAction.intent === 'delete_event'
-          ? "supprimer l'evenement"
-          : pendingAction.intent === 'modify_task'
-          ? 'renommer la tache'
-          : "modifier l'evenement"}
+          {pendingAction.language === 'en' ? 'Yes, ' : 'Oui, '}
+          {pendingAction.intent === 'create_task'
+            ? pendingAction.language === 'en'
+              ? 'create task'
+              : 'créer la tâche'
+            : pendingAction.intent === 'create_event'
+            ? pendingAction.language === 'en'
+              ? 'create event'
+              : "créer l'événement"
+            : pendingAction.intent === 'delete_task'
+            ? pendingAction.language === 'en'
+              ? 'delete task'
+              : 'supprimer la tâche'
+            : pendingAction.intent === 'delete_event'
+            ? pendingAction.language === 'en'
+              ? 'delete event'
+              : "supprimer l'événement"
+            : pendingAction.intent === 'modify_task'
+            ? pendingAction.language === 'en'
+              ? 'rename task'
+              : 'renommer la tâche'
+            : pendingAction.language === 'en'
+            ? 'change event'
+            : "modifier l'événement"}
       </Text>
     </TouchableOpacity>
     <TouchableOpacity style={styles.checkRow} onPress={handleIgnore}>
       <View style={styles.checkbox} />
-      <Text style={styles.checkRowText}>Non merci</Text>
+        <Text style={styles.checkRowText}>{pendingAction.language === 'en' ? 'No thanks' : 'Non merci'}</Text>
     </TouchableOpacity>
   </>
 )}
@@ -436,10 +689,10 @@ const transcribeAndSend = async (uri: string) => {
             placeholderTextColor={colors.inkSoft}
             value={inputText}
             onChangeText={setInputText}
-            onSubmitEditing={sendMessage}
+            onSubmitEditing={() => sendMessage('text')}
             returnKeyType="send"
           />
-          <TouchableOpacity onPress={sendMessage}>
+          <TouchableOpacity onPress={() => sendMessage('text')}>
             <Feather name="arrow-up-circle" size={26} color={colors.tealDeep} />
           </TouchableOpacity>
         </View>
@@ -511,6 +764,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
   content: {
     flex: 1,
   },
@@ -528,6 +786,11 @@ const styles = StyleSheet.create({
   assistantCard: {
     backgroundColor: colors.tealPale,
   },
+  errorAssistantCard: {
+    backgroundColor: '#FFF4EF',
+    borderWidth: 1,
+    borderColor: '#F1B59A',
+  },
   subLine: {
     fontSize: 12.5,
     color: colors.inkSoft,
@@ -541,6 +804,9 @@ const styles = StyleSheet.create({
   },
   assistantTitleLine: {
     fontFamily: 'IBMPlexSans_500Medium',
+  },
+  errorAssistantTitleLine: {
+    color: '#B5502A',
   },
   checkRow: {
     flexDirection: 'row',
