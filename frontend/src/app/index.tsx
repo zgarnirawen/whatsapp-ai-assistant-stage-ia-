@@ -26,6 +26,8 @@ import {
   IBMPlexSans_500Medium,
   IBMPlexSans_600SemiBold,
 } from '@expo-google-fonts/ibm-plex-sans';
+import ActionProposal from '@/components/ActionProposal';
+import type { ActionProposalData } from '@/components/ActionProposal';
 
 const API_BASE_URL = Platform.OS === 'web' ? 'http://localhost:3000' : 'http://10.224.58.5:3000';
 
@@ -51,14 +53,7 @@ interface ChatMessage {
   variant?: 'normal' | 'error';
 }
 
-interface ProposedAction {
-  interactionId: string;
-  intent: string;
-  details: any;
-  targetId?: string | null;
-  requiresValidation: boolean;
-  language?: Lang;
-}
+interface ProposedAction extends ActionProposalData {}
 
 type Lang = 'fr' | 'en';
 
@@ -90,7 +85,6 @@ const UI_TEXT = {
     actionConfirmed: 'Action confirmée et exécutée.',
     actionCancelled: 'Action annulée.',
     actionFallback: 'Action traitée.',
-    audioError: "Désolé, je n'ai pas pu comprendre l'audio, réessaie ou tape ton message.",
     serverError: 'Erreur de connexion au serveur.',
   },
   en: {
@@ -113,7 +107,6 @@ const UI_TEXT = {
     actionConfirmed: 'Action confirmed and executed.',
     actionCancelled: 'Action canceled.',
     actionFallback: 'Action processed.',
-    audioError: "Sorry, I couldn't understand the audio. Try again or type your message.",
     serverError: 'Server connection error.',
   },
 } as const;
@@ -138,8 +131,10 @@ function formatLocalizedDate(dateTime: string | undefined, lang: Lang) {
 function formatTime(date: Date) {
   return date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
 }
+
 const AFFIRMATIVE_WORDS = ['oui', 'ok', "d'accord", 'daccord', 'yes', 'vas-y', 'confirme', 'valide'];
 const NEGATIVE_WORDS = ['non', 'no', 'annule', 'annuler', 'stop', 'laisse tomber'];
+
 export default function HomeScreen() {
   const [spaceGroteskLoaded] = useSpaceGrotesk({
     SpaceGrotesk_500Medium,
@@ -172,10 +167,7 @@ export default function HomeScreen() {
   const speakAssistantResponse = useCallback(
     (text: string, language: Lang = 'fr') => {
       const speechText = text.trim();
-      if (!ttsEnabled || !speechText) {
-        return;
-      }
-
+      if (!ttsEnabled || !speechText) return;
       try {
         Speech.stop();
         Speech.speak(speechText, { language: language === 'en' ? 'en-US' : 'fr-FR' });
@@ -189,10 +181,7 @@ export default function HomeScreen() {
   const addAssistantMessage = useCallback(
     (text: string, options?: { variant?: 'normal' | 'error'; speak?: boolean; language?: Lang }) => {
       const messageText = text.trim();
-      if (!messageText) {
-        return;
-      }
-
+      if (!messageText) return;
       setMessages((previous) => [
         ...previous,
         {
@@ -203,10 +192,7 @@ export default function HomeScreen() {
           variant: options?.variant ?? 'normal',
         },
       ]);
-
-      if (options?.speak) {
-        speakAssistantResponse(messageText, options.language);
-      }
+      if (options?.speak) speakAssistantResponse(messageText, options.language);
     },
     [speakAssistantResponse]
   );
@@ -214,339 +200,90 @@ export default function HomeScreen() {
   const toggleTts = () => {
     setTtsEnabled((previous) => {
       const nextEnabled = !previous;
-      if (!nextEnabled) {
-        Speech.stop();
-      }
+      if (!nextEnabled) Speech.stop();
       return nextEnabled;
     });
   };
-const startRecording = async () => {
-  try {
-    if (recording) {
-      await recording.stopAndUnloadAsync().catch(() => {});
-      setRecording(null);
-    }
-    const permission = await Audio.requestPermissionsAsync();
-    if (!permission.granted) {
-      console.error('Microphone permission not granted');
-      return;
-    }
-    await Audio.setAudioModeAsync({
-      allowsRecordingIOS: true,
-      playsInSilentModeIOS: true,
-    });
-    const { recording: newRecording } = await Audio.Recording.createAsync(
-      Audio.RecordingOptionsPresets.HIGH_QUALITY
-    );
-    setRecording(newRecording);
-    setIsRecording(true);
-  } catch (error) {
-    console.error('Failed to start recording', error);
-  }
-};
 
-const stopRecording = async () => {
-  if (!recording) return;
-  setIsRecording(false);
-  try {
-    await recording.stopAndUnloadAsync();
-    const uri = recording.getURI();
-    setRecording(null);
-    if (uri) {
-      await transcribeAndSend(uri);
-    }
-  } catch (error) {
-    console.error('Failed to stop recording', error);
-  }
-};
-const handleMicPress = () => {
-  if (isRecording) {
-    stopRecording();
-  } else {
-    startRecording();
-  }
-};
-const transcribeAndSend = async (uri: string) => {
-  try {
-    const formData = new FormData();
-
-if (Platform.OS === "web") {
-  const blob = await fetch(uri).then(r => r.blob());
-
-  formData.append(
-    "audio",
-    blob,
-    "audio.webm" // or .wav depending on what Expo records
-  );
-} else {
-  formData.append("audio", {
-    uri,
-    name: "audio.m4a",
-    type: "audio/m4a",
-  } as any);
-}
-
-    const response = await axios.post(`${API_BASE_URL}/assistant/transcribe`, formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
-
-    const transcribedText = response.data.text?.trim();
-    if (transcribedText) {
-      setInputText(transcribedText);
-      await sendMessage('voice', transcribedText);
-    } else {
-      addAssistantMessage(
-        "Désolé, je n'ai pas pu comprendre l'audio, réessaie ou tape ton message.",
-        { variant: 'error' }
-      );
-    }
-  } catch (error) {
-    console.error('Transcription failed', error);
-    addAssistantMessage(
-      "Désolé, je n'ai pas pu comprendre l'audio, réessaie ou tape ton message.",
-      { variant: 'error' }
-    );
-  }
-};
- const sendMessage = useCallback(async (inputMode: 'voice' | 'text', overrideText?: string) => {
-    const text = (overrideText ?? inputText).trim();
-    if (!text) return;
-
-    const normalizedText = text.toLowerCase();
-
-    if (pendingClarification) {
-      const userMessage: ChatMessage = {
-        id: Math.random().toString(),
-        role: 'user',
-        text,
-        time: formatTime(new Date()),
-      };
-      setMessages((previous) => [...previous, userMessage]);
-      setInputText('');
-
-      const clarifiedDetails = {
-        ...pendingClarification.pendingAction.details,
-        [pendingClarification.missingField]: text,
-      };
-      const clarifiedAction: ProposedAction = {
-        ...pendingClarification.pendingAction,
-        details: clarifiedDetails,
-      };
-
-      setPendingClarification(null);
-      setPendingAction(clarifiedAction);
-
-      if (clarifiedAction.intent === 'modify_task') {
-        const assistantText = UI_TEXT[pendingClarification.lang].modifyTaskConfirm(
-          pendingClarification.targetTitle,
-          text
-        );
-        addAssistantMessage(assistantText, { speak: true, language: pendingClarification.lang });
-      } else if (clarifiedAction.intent === 'modify_event') {
-        const assistantText = UI_TEXT[pendingClarification.lang].modifyEventConfirm(
-          pendingClarification.targetTitle,
-          text
-        );
-        addAssistantMessage(assistantText, { speak: true, language: pendingClarification.lang });
-      }
-      return;
-    }
-
-    if (pendingAction) {
-      if (AFFIRMATIVE_WORDS.includes(normalizedText)) {
-        const userMessage: ChatMessage = {
-          id: Math.random().toString(),
-          role: 'user',
-          text,
-          time: formatTime(new Date()),
-        };
-        setMessages((previous) => [...previous, userMessage]);
-        setInputText('');
-        await handleValidate();
-        return;
-      }
-      if (NEGATIVE_WORDS.includes(normalizedText)) {
-        const userMessage: ChatMessage = {
-          id: Math.random().toString(),
-          role: 'user',
-          text,
-          time: formatTime(new Date()),
-        };
-        setMessages((previous) => [...previous, userMessage]);
-        setInputText('');
-        handleIgnore();
-        return;
-      }
-    }
-
-    setPendingAction(null);
-
-    let effectiveText = text;
-    if (awaitingPeriodClarification) {
-      effectiveText = awaitingPeriodClarification + ' ' + text;
-      setAwaitingPeriodClarification(null);
-    }
-
-    const userMessage: ChatMessage = {
-      id: Math.random().toString(),
-      role: 'user',
-      text,
-      time: formatTime(new Date()),
-    };
-    setMessages((previous) => [...previous, userMessage]);
-    setInputText('');
-
+  const startRecording = async () => {
     try {
-      const response = await axios.post(`${API_BASE_URL}/assistant/message`, {
-        inputText: effectiveText,
-        inputMode,
-      });
-
-      const { result, responseMessage, proposedAction } = response.data;
-      const detectedLanguage = getLang(result?.language);
-
-      let assistantText = responseMessage;
-
-      if (proposedAction) {
-        if (proposedAction.intent === 'create_task') {
-          setPendingAction({ ...proposedAction, language: detectedLanguage });
-          assistantText = UI_TEXT[detectedLanguage].createTaskConfirm(proposedAction.details.taskTitle);
-        } else if (proposedAction.intent === 'create_event') {
-          setPendingAction({ ...proposedAction, language: detectedLanguage });
-          assistantText = UI_TEXT[detectedLanguage].createEventConfirm(
-            proposedAction.details.eventTitle,
-            formatLocalizedDate(proposedAction.details.eventDateTime, detectedLanguage)
-          );
-        } else if (proposedAction.intent === 'delete_task') {
-          const targetTitle = response.data.modifyDeleteInfo?.target?.title;
-          if (!targetTitle) {
-            assistantText = UI_TEXT[detectedLanguage].notFound(response.data.modifyDeleteInfo?.query || '');
-          } else {
-            setPendingAction({ ...proposedAction, language: detectedLanguage });
-            assistantText = UI_TEXT[detectedLanguage].deleteTaskConfirm(targetTitle);
-          }
-        } else if (proposedAction.intent === 'delete_event') {
-          const targetTitle = response.data.modifyDeleteInfo?.target?.title;
-          if (!targetTitle) {
-            assistantText = UI_TEXT[detectedLanguage].notFound(response.data.modifyDeleteInfo?.query || '');
-          } else {
-            setPendingAction({ ...proposedAction, language: detectedLanguage });
-            assistantText = UI_TEXT[detectedLanguage].deleteEventConfirm(targetTitle);
-          }
-        } else if (proposedAction.intent === 'modify_task') {
-          const targetTitle = response.data.modifyDeleteInfo?.target?.title;
-          const newTitle = proposedAction.details?.newTaskTitle?.trim();
-          if (!targetTitle) {
-            assistantText = UI_TEXT[detectedLanguage].notFound(response.data.modifyDeleteInfo?.query || '');
-          } else if (!newTitle) {
-            setPendingAction(null);
-            setPendingClarification({
-              pendingAction: proposedAction,
-              targetTitle,
-              lang: detectedLanguage,
-              missingField: 'newTaskTitle',
-            });
-            assistantText = UI_TEXT[detectedLanguage].modifyTaskClarify(targetTitle);
-          } else {
-            setPendingAction({ ...proposedAction, language: detectedLanguage });
-            assistantText = UI_TEXT[detectedLanguage].modifyTaskConfirm(targetTitle, newTitle);
-          }
-        } else if (proposedAction.intent === 'modify_event') {
-          const targetTitle = response.data.modifyDeleteInfo?.target?.title;
-          const newTitle = proposedAction.details?.newEventTitle?.trim();
-          if (!targetTitle) {
-            assistantText = UI_TEXT[detectedLanguage].notFound(response.data.modifyDeleteInfo?.query || '');
-          } else if (!newTitle) {
-            setPendingAction(null);
-            setPendingClarification({
-              pendingAction: proposedAction,
-              targetTitle,
-              lang: detectedLanguage,
-              missingField: 'newEventTitle',
-            });
-            assistantText = UI_TEXT[detectedLanguage].modifyEventClarify(targetTitle);
-          } else {
-            setPendingAction({ ...proposedAction, language: detectedLanguage });
-            assistantText = UI_TEXT[detectedLanguage].modifyEventConfirm(targetTitle, newTitle);
-          }
-        }
-      } else if (response.data.modifyDeleteInfo?.status === 'not_found') {
-        assistantText = UI_TEXT[detectedLanguage].notFound(response.data.modifyDeleteInfo.query || '');
-      } else if (response.data.modifyDeleteInfo?.status === 'ambiguous') {
-        const titles = response.data.modifyDeleteInfo.matches.map((m: any) => '- ' + m.title).join('\n');
-        assistantText = UI_TEXT[detectedLanguage].ambiguous(titles);
-      } else if (result?.intent === 'summarize_period') {
-  if (result.summaryDates && result.summaryDates.length > 0) {
-    const byDate = response.data.summaryDataByDate || {};
-    const parts = result.summaryDates.map((date: string) => {
-      const dayData = byDate[date] || { tasks: [], events: [] };
-      const taskCount = dayData.tasks.length;
-      const eventCount = dayData.events.length;
-      if (taskCount === 0 && eventCount === 0) {
-        return date + ' : rien de prevu.';
+      if (recording) {
+        await recording.stopAndUnloadAsync().catch(() => {});
+        setRecording(null);
       }
-      const taskList = dayData.tasks.map((t: any) => '  - ' + t.title).join('\n');
-      const eventList = dayData.events.map((e: any) => '  - ' + e.title + ' (' + e.dateTime + ')').join('\n');
-      return (
-        date + ' :\n' +
-        (taskCount > 0 ? '  Taches:\n' + taskList + '\n' : '') +
-        (eventCount > 0 ? '  Evenements:\n' + eventList : '')
+      const permission = await Audio.requestPermissionsAsync();
+      if (!permission.granted) return;
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+      const { recording: newRecording } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY
       );
-    });
-    assistantText = `${UI_TEXT[detectedLanguage].summaryIntro} :\n${parts.join('\n\n')}`;
-  } else if (result.summaryPeriodStart && result.summaryPeriodEnd) {
-    const periodLabel =
-      result.summaryPeriodStart === result.summaryPeriodEnd
-        ? 'pour le ' + result.summaryPeriodStart
-        : 'pour la periode du ' + result.summaryPeriodStart + ' au ' + result.summaryPeriodEnd;
-
-    const taskCount = response.data.summaryData?.tasks?.length || 0;
-    const eventCount = response.data.summaryData?.events?.length || 0;
-
-    if (taskCount === 0 && eventCount === 0) {
-      const scopeLabel =
-        response.data.summaryScope === 'tasks'
-          ? UI_TEXT[detectedLanguage].summaryNoTasks
-          : response.data.summaryScope === 'events'
-          ? UI_TEXT[detectedLanguage].summaryNoEvents
-          : UI_TEXT[detectedLanguage].summaryNoItems;
-      assistantText = `${UI_TEXT[detectedLanguage].summaryIntro} ${periodLabel} : ${scopeLabel}`;
-    } else {
-      const taskList = (response.data.summaryData?.tasks || [])
-        .map((t: any) => '- ' + t.title)
-        .join('\n');
-      const eventList = (response.data.summaryData?.events || [])
-        .map((e: any) => '- ' + e.title + ' (' + e.dateTime + ')')
-        .join('\n');
-      assistantText =
-        `${UI_TEXT[detectedLanguage].summaryIntro} ${periodLabel} :\n` +
-        (taskCount > 0 ? `${detectedLanguage === 'fr' ? 'Tâches' : 'Tasks'}:\n${taskList}\n` : '') +
-        (eventCount > 0 ? `${detectedLanguage === 'fr' ? 'Événements' : 'Events'}:\n${eventList}` : '');
-    }
-  } else {
-    assistantText = UI_TEXT[detectedLanguage].summaryClarify;
-    setAwaitingPeriodClarification(text);
-  }
-}
-
-      addAssistantMessage(assistantText || UI_TEXT[detectedLanguage].actionFallback, { speak: true, language: detectedLanguage });
+      setRecording(newRecording);
+      setIsRecording(true);
     } catch (error) {
-      console.error(error);
-      addAssistantMessage(UI_TEXT.fr.serverError, { variant: 'error', speak: true, language: 'fr' });
+      console.error('Failed to start recording', error);
     }
-  }, [inputText, awaitingPeriodClarification, addAssistantMessage]);
+  };
 
-  const handleValidate = async () => {
-  if (!pendingAction) return;
-  try {
-    await axios.post(`${API_BASE_URL}/assistant/confirm-action`, {
-      interactionId: pendingAction.interactionId,
-      intent: pendingAction.intent,
-      details: pendingAction.details,
-      targetId: pendingAction.targetId,
-    });
+  const transcribeAndSend = async (uri: string) => {
+    try {
+      const formData = new FormData();
+      if (Platform.OS === 'web') {
+        const blob = await fetch(uri).then((r) => r.blob());
+        formData.append('audio', blob, 'audio.webm');
+      } else {
+        formData.append('audio', { uri, name: 'audio.m4a', type: 'audio/m4a' } as any);
+      }
+      const response = await axios.post(`${API_BASE_URL}/assistant/transcribe`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      const transcribedText = response.data.text?.trim();
+      if (transcribedText) {
+        setInputText(transcribedText);
+        await sendMessage('voice', transcribedText);
+      } else {
+        addAssistantMessage("Désolé, je n'ai pas pu comprendre l'audio, réessaie ou tape ton message.", {
+          variant: 'error',
+        });
+      }
+    } catch (error) {
+      console.error('Transcription failed', error);
+      addAssistantMessage("Désolé, je n'ai pas pu comprendre l'audio, réessaie ou tape ton message.", {
+        variant: 'error',
+      });
+    }
+  };
+
+  const stopRecording = async () => {
+    if (!recording) return;
+    setIsRecording(false);
+    try {
+      await recording.stopAndUnloadAsync();
+      const uri = recording.getURI();
+      setRecording(null);
+      if (uri) await transcribeAndSend(uri);
+    } catch (error) {
+      console.error('Failed to stop recording', error);
+    }
+  };
+
+  const handleMicPress = () => {
+    if (isRecording) stopRecording();
+    else startRecording();
+  };
+
+  const handleValidate = useCallback(async () => {
+    if (!pendingAction) return;
+    try {
+      const response = await axios.post(`${API_BASE_URL}/assistant/confirm-action`, {
+        interactionId: pendingAction.interactionId,
+        intent: pendingAction.intent,
+        details: pendingAction.details,
+        targetId: pendingAction.targetId,
+      });
+      const confirmationMessage = response.data.confirmationMessage;
       addAssistantMessage(
-        pendingAction.language === 'en' ? UI_TEXT.en.actionConfirmed : UI_TEXT.fr.actionConfirmed,
+        confirmationMessage ||
+          (pendingAction.language === 'en' ? UI_TEXT.en.actionConfirmed : UI_TEXT.fr.actionConfirmed),
         { speak: true, language: pendingAction.language || 'fr' }
       );
       setPendingAction(null);
@@ -556,16 +293,12 @@ if (Platform.OS === "web") {
         pendingAction.language === 'en'
           ? "Sorry, I couldn't complete the requested action."
           : "Désolé, je n'ai pas pu exécuter l'action demandée.",
-        {
-        variant: 'error',
-          speak: true,
-          language: pendingAction.language || 'fr',
-        }
+        { variant: 'error', speak: true, language: pendingAction.language || 'fr' }
       );
     }
-  };
+  }, [pendingAction, addAssistantMessage]);
 
-  const handleIgnore = () => {
+  const handleIgnore = useCallback(() => {
     setMessages((previous) => [
       ...previous,
       {
@@ -576,7 +309,221 @@ if (Platform.OS === "web") {
       },
     ]);
     setPendingAction(null);
-  };
+  }, [pendingAction]);
+
+  const handleSaveProposalEdit = useCallback((details: Record<string, any>) => {
+    setPendingAction((previous) => (previous ? { ...previous, details } : previous));
+  }, []);
+
+  const handleModifyRequest = useCallback(() => {
+    const lang = pendingAction?.language || 'fr';
+    const hint =
+      lang === 'en'
+        ? 'Tell me what you want to change, then I will generate a new proposal.'
+        : 'Indiquez ce que vous souhaitez modifier et je générerai une nouvelle proposition.';
+    setPendingAction(null);
+    setInputText('');
+    addAssistantMessage(hint, { speak: true, language: lang });
+  }, [pendingAction, addAssistantMessage]);
+
+  const sendMessage = useCallback(
+    async (inputMode: 'voice' | 'text', overrideText?: string) => {
+      const text = (overrideText ?? inputText).trim();
+      if (!text) return;
+      const normalizedText = text.toLowerCase();
+
+      if (pendingClarification) {
+        const userMessage: ChatMessage = {
+          id: Math.random().toString(),
+          role: 'user',
+          text,
+          time: formatTime(new Date()),
+        };
+        setMessages((previous) => [...previous, userMessage]);
+        setInputText('');
+        const clarifiedDetails = {
+          ...pendingClarification.pendingAction.details,
+          [pendingClarification.missingField]: text,
+        };
+        const clarifiedAction: ProposedAction = {
+          ...pendingClarification.pendingAction,
+          details: clarifiedDetails,
+        };
+        setPendingClarification(null);
+        setPendingAction(clarifiedAction);
+        if (clarifiedAction.intent === 'modify_task') {
+          addAssistantMessage(
+            UI_TEXT[pendingClarification.lang].modifyTaskConfirm(pendingClarification.targetTitle, text),
+            { speak: true, language: pendingClarification.lang }
+          );
+        } else if (clarifiedAction.intent === 'modify_event') {
+          addAssistantMessage(
+            UI_TEXT[pendingClarification.lang].modifyEventConfirm(pendingClarification.targetTitle, text),
+            { speak: true, language: pendingClarification.lang }
+          );
+        }
+        return;
+      }
+
+      if (pendingAction) {
+        if (AFFIRMATIVE_WORDS.includes(normalizedText)) {
+          setMessages((previous) => [
+            ...previous,
+            { id: Math.random().toString(), role: 'user', text, time: formatTime(new Date()) },
+          ]);
+          setInputText('');
+          await handleValidate();
+          return;
+        }
+        if (NEGATIVE_WORDS.includes(normalizedText)) {
+          setMessages((previous) => [
+            ...previous,
+            { id: Math.random().toString(), role: 'user', text, time: formatTime(new Date()) },
+          ]);
+          setInputText('');
+          handleIgnore();
+          return;
+        }
+      }
+
+      setPendingAction(null);
+      let effectiveText = text;
+      if (awaitingPeriodClarification) {
+        effectiveText = `${awaitingPeriodClarification} ${text}`;
+        setAwaitingPeriodClarification(null);
+      }
+
+      setMessages((previous) => [
+        ...previous,
+        { id: Math.random().toString(), role: 'user', text, time: formatTime(new Date()) },
+      ]);
+      setInputText('');
+
+      try {
+        const response = await axios.post(`${API_BASE_URL}/assistant/message`, {
+          inputText: effectiveText,
+          inputMode,
+        });
+        const { result, responseMessage, proposedAction } = response.data;
+        const detectedLanguage = getLang(result?.language);
+        let assistantText = responseMessage;
+
+        if (proposedAction) {
+          if (proposedAction.intent === 'create_task') {
+            setPendingAction({ ...proposedAction, language: detectedLanguage });
+            assistantText = UI_TEXT[detectedLanguage].createTaskConfirm(proposedAction.details.taskTitle);
+          } else if (proposedAction.intent === 'create_event') {
+            setPendingAction({ ...proposedAction, language: detectedLanguage });
+            assistantText = UI_TEXT[detectedLanguage].createEventConfirm(
+              proposedAction.details.eventTitle,
+              formatLocalizedDate(proposedAction.details.eventDateTime, detectedLanguage)
+            );
+          } else if (proposedAction.intent === 'delete_task') {
+            const targetTitle = response.data.modifyDeleteInfo?.target?.title;
+            if (!targetTitle) assistantText = UI_TEXT[detectedLanguage].notFound(response.data.modifyDeleteInfo?.query || '');
+            else {
+              setPendingAction({ ...proposedAction, language: detectedLanguage });
+              assistantText = UI_TEXT[detectedLanguage].deleteTaskConfirm(targetTitle);
+            }
+          } else if (proposedAction.intent === 'delete_event') {
+            const targetTitle = response.data.modifyDeleteInfo?.target?.title;
+            if (!targetTitle) assistantText = UI_TEXT[detectedLanguage].notFound(response.data.modifyDeleteInfo?.query || '');
+            else {
+              setPendingAction({ ...proposedAction, language: detectedLanguage });
+              assistantText = UI_TEXT[detectedLanguage].deleteEventConfirm(targetTitle);
+            }
+          } else if (proposedAction.intent === 'modify_task') {
+            const targetTitle = response.data.modifyDeleteInfo?.target?.title;
+            const newTitle = proposedAction.details?.newTaskTitle?.trim();
+            if (!targetTitle) assistantText = UI_TEXT[detectedLanguage].notFound(response.data.modifyDeleteInfo?.query || '');
+            else if (!newTitle) {
+              setPendingAction(null);
+              setPendingClarification({
+                pendingAction: proposedAction,
+                targetTitle,
+                lang: detectedLanguage,
+                missingField: 'newTaskTitle',
+              });
+              assistantText = UI_TEXT[detectedLanguage].modifyTaskClarify(targetTitle);
+            } else {
+              setPendingAction({ ...proposedAction, language: detectedLanguage });
+              assistantText = UI_TEXT[detectedLanguage].modifyTaskConfirm(targetTitle, newTitle);
+            }
+          } else if (proposedAction.intent === 'modify_event') {
+            const targetTitle = response.data.modifyDeleteInfo?.target?.title;
+            const newTitle = proposedAction.details?.newEventTitle?.trim();
+            if (!targetTitle) assistantText = UI_TEXT[detectedLanguage].notFound(response.data.modifyDeleteInfo?.query || '');
+            else if (!newTitle && !proposedAction.details?.newEventDateTime) {
+              setPendingAction(null);
+              setPendingClarification({
+                pendingAction: proposedAction,
+                targetTitle,
+                lang: detectedLanguage,
+                missingField: 'newEventTitle',
+              });
+              assistantText = UI_TEXT[detectedLanguage].modifyEventClarify(targetTitle);
+            } else {
+              setPendingAction({ ...proposedAction, language: detectedLanguage });
+              assistantText = UI_TEXT[detectedLanguage].modifyEventConfirm(targetTitle, newTitle || targetTitle);
+            }
+          }
+        } else if (response.data.modifyDeleteInfo?.status === 'not_found') {
+          assistantText = UI_TEXT[detectedLanguage].notFound(response.data.modifyDeleteInfo.query || '');
+        } else if (response.data.modifyDeleteInfo?.status === 'ambiguous') {
+          const titles = response.data.modifyDeleteInfo.matches.map((m: any) => '- ' + m.title).join('\n');
+          assistantText = UI_TEXT[detectedLanguage].ambiguous(titles);
+        } else if (result?.intent === 'summarize_period') {
+          if (result.summaryDates && result.summaryDates.length > 0) {
+            const byDate = response.data.summaryDataByDate || {};
+            const parts = result.summaryDates.map((date: string) => {
+              const dayData = byDate[date] || { tasks: [], events: [] };
+              const taskCount = dayData.tasks.length;
+              const eventCount = dayData.events.length;
+              if (taskCount === 0 && eventCount === 0) return date + ' : rien de prevu.';
+              const taskList = dayData.tasks.map((t: any) => '  - ' + t.title).join('\n');
+              const eventList = dayData.events.map((e: any) => '  - ' + e.title + ' (' + e.dateTime + ')').join('\n');
+              return date + ' :\n' +
+                (taskCount > 0 ? '  Taches:\n' + taskList + '\n' : '') +
+                (eventCount > 0 ? '  Evenements:\n' + eventList : '');
+            });
+            assistantText = `${UI_TEXT[detectedLanguage].summaryIntro} :\n${parts.join('\n\n')}`;
+          } else if (result.summaryPeriodStart && result.summaryPeriodEnd) {
+            const periodLabel = result.summaryPeriodStart === result.summaryPeriodEnd
+              ? 'pour le ' + result.summaryPeriodStart
+              : 'pour la periode du ' + result.summaryPeriodStart + ' au ' + result.summaryPeriodEnd;
+            const taskCount = response.data.summaryData?.tasks?.length || 0;
+            const eventCount = response.data.summaryData?.events?.length || 0;
+            if (taskCount === 0 && eventCount === 0) {
+              const scopeLabel = response.data.summaryScope === 'tasks'
+                ? UI_TEXT[detectedLanguage].summaryNoTasks
+                : response.data.summaryScope === 'events'
+                ? UI_TEXT[detectedLanguage].summaryNoEvents
+                : UI_TEXT[detectedLanguage].summaryNoItems;
+              assistantText = `${UI_TEXT[detectedLanguage].summaryIntro} ${periodLabel} : ${scopeLabel}`;
+            } else {
+              const taskList = (response.data.summaryData?.tasks || []).map((t: any) => '- ' + t.title).join('\n');
+              const eventList = (response.data.summaryData?.events || []).map((e: any) => '- ' + e.title + ' (' + e.dateTime + ')').join('\n');
+              assistantText = `${UI_TEXT[detectedLanguage].summaryIntro} ${periodLabel} :\n` +
+                (taskCount > 0 ? `${detectedLanguage === 'fr' ? 'Tâches' : 'Tasks'}:\n${taskList}\n` : '') +
+                (eventCount > 0 ? `${detectedLanguage === 'fr' ? 'Événements' : 'Events'}:\n${eventList}` : '');
+            }
+          } else {
+            assistantText = UI_TEXT[detectedLanguage].summaryClarify;
+            setAwaitingPeriodClarification(text);
+          }
+        }
+
+        addAssistantMessage(assistantText || UI_TEXT[detectedLanguage].actionFallback, {
+          speak: true,
+          language: detectedLanguage,
+        });
+      } catch (error) {
+        console.error(error);
+        addAssistantMessage(UI_TEXT.fr.serverError, { variant: 'error', speak: true, language: 'fr' });
+      }
+    },
+    [inputText, awaitingPeriodClarification, pendingClarification, pendingAction, addAssistantMessage, handleValidate, handleIgnore]
+  );
 
   if (!spaceGroteskLoaded || !ibmPlexSansLoaded) {
     return (
@@ -604,11 +551,11 @@ if (Platform.OS === "web") {
       </View>
 
       <ScrollView
-  ref={scrollViewRef}
-  style={styles.content}
-  contentContainerStyle={styles.contentInner}
-  onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
->
+        ref={scrollViewRef}
+        style={styles.content}
+        contentContainerStyle={styles.contentInner}
+        onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
+      >
         {messages.map((m) =>
           m.role === 'user' ? (
             <View key={m.id} style={[styles.card, styles.userCard]}>
@@ -616,20 +563,9 @@ if (Platform.OS === "web") {
               <Text style={styles.titleLine}>{m.text}</Text>
             </View>
           ) : (
-            <View
-              key={m.id}
-              style={[
-                styles.card,
-                styles.assistantCard,
-                m.variant === 'error' && styles.errorAssistantCard,
-              ]}>
+            <View key={m.id} style={[styles.card, styles.assistantCard, m.variant === 'error' && styles.errorAssistantCard]}>
               <Text style={[styles.subLine, { color: colors.tealDeep }]}>Assistant</Text>
-              <Text
-                style={[
-                  styles.titleLine,
-                  styles.assistantTitleLine,
-                  m.variant === 'error' && styles.errorAssistantTitleLine,
-                ]}>
+              <Text style={[styles.titleLine, styles.assistantTitleLine, m.variant === 'error' && styles.errorAssistantTitleLine]}>
                 {m.text}
               </Text>
             </View>
@@ -637,52 +573,22 @@ if (Platform.OS === "web") {
         )}
 
         {pendingAction && (
-  <>
-    <TouchableOpacity style={styles.checkRow} onPress={handleValidate}>
-      <View style={styles.checkbox} />
-      <Text style={styles.checkRowText}>
-          {pendingAction.language === 'en' ? 'Yes, ' : 'Oui, '}
-          {pendingAction.intent === 'create_task'
-            ? pendingAction.language === 'en'
-              ? 'create task'
-              : 'créer la tâche'
-            : pendingAction.intent === 'create_event'
-            ? pendingAction.language === 'en'
-              ? 'create event'
-              : "créer l'événement"
-            : pendingAction.intent === 'delete_task'
-            ? pendingAction.language === 'en'
-              ? 'delete task'
-              : 'supprimer la tâche'
-            : pendingAction.intent === 'delete_event'
-            ? pendingAction.language === 'en'
-              ? 'delete event'
-              : "supprimer l'événement"
-            : pendingAction.intent === 'modify_task'
-            ? pendingAction.language === 'en'
-              ? 'rename task'
-              : 'renommer la tâche'
-            : pendingAction.language === 'en'
-            ? 'change event'
-            : "modifier l'événement"}
-      </Text>
-    </TouchableOpacity>
-    <TouchableOpacity style={styles.checkRow} onPress={handleIgnore}>
-      <View style={styles.checkbox} />
-        <Text style={styles.checkRowText}>{pendingAction.language === 'en' ? 'No thanks' : 'Non merci'}</Text>
-    </TouchableOpacity>
-  </>
-)}
+          <ActionProposal
+            action={pendingAction}
+            onValidate={handleValidate}
+            onIgnore={handleIgnore}
+            onSaveEdit={handleSaveProposalEdit}
+            onModifyRequest={handleModifyRequest}
+            formatDate={formatLocalizedDate}
+          />
+        )}
       </ScrollView>
 
       <View style={styles.inputBarWrap}>
         <View style={styles.voicebar}>
-         <TouchableOpacity
-  style={[styles.playbtn, isRecording && styles.playbtnActive]}
-  onPress={handleMicPress}
->
-  <Feather name="mic" size={14} color="#fff" />
-</TouchableOpacity>
+          <TouchableOpacity style={[styles.playbtn, isRecording && styles.playbtnActive]} onPress={handleMicPress}>
+            <Feather name="mic" size={14} color="#fff" />
+          </TouchableOpacity>
           <TextInput
             style={styles.textInput}
             placeholder="Ecrivez ou dictez votre message..."
@@ -708,13 +614,10 @@ if (Platform.OS === "web") {
           <Text style={styles.navLabel}>Taches</Text>
         </TouchableOpacity>
         <View style={styles.navMicWrap}>
-  <TouchableOpacity
-    style={[styles.navMicBtn, isRecording && styles.playbtnActive]}
-    onPress={handleMicPress}
-  >
-    <Feather name="mic" size={20} color="#fff" />
-  </TouchableOpacity>
-</View>
+          <TouchableOpacity style={[styles.navMicBtn, isRecording && styles.playbtnActive]} onPress={handleMicPress}>
+            <Feather name="mic" size={20} color="#fff" />
+          </TouchableOpacity>
+        </View>
         <TouchableOpacity style={styles.navItem}>
           <Feather name="calendar" size={20} color={colors.inkSoft} />
           <Text style={styles.navLabel}>Agenda</Text>
@@ -729,14 +632,8 @@ if (Platform.OS === "web") {
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: colors.bg,
-  },
-  loadingWrap: {
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
+  safeArea: { flex: 1, backgroundColor: colors.bg },
+  loadingWrap: { justifyContent: 'center', alignItems: 'center' },
   appbar: {
     backgroundColor: colors.tealDeep,
     paddingHorizontal: 20,
@@ -745,17 +642,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  appbarTitle: {
-    color: '#fff',
-    fontSize: 18,
-    fontFamily: 'SpaceGrotesk_600SemiBold',
-  },
-  appbarSub: {
-    color: '#BFDAD3',
-    fontSize: 12,
-    marginTop: 2,
-    fontFamily: 'IBMPlexSans_400Regular',
-  },
+  appbarTitle: { color: '#fff', fontSize: 18, fontFamily: 'SpaceGrotesk_600SemiBold' },
+  appbarSub: { color: '#BFDAD3', fontSize: 12, marginTop: 2, fontFamily: 'IBMPlexSans_400Regular' },
   iconBtn: {
     width: 34,
     height: 34,
@@ -764,76 +652,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  content: {
-    flex: 1,
-  },
-  contentInner: {
-    padding: 16,
-    gap: 10,
-  },
-  card: {
-    borderRadius: 16,
-    padding: 14,
-  },
-  userCard: {
-    backgroundColor: colors.surfaceAlt,
-  },
-  assistantCard: {
-    backgroundColor: colors.tealPale,
-  },
-  errorAssistantCard: {
-    backgroundColor: '#FFF4EF',
-    borderWidth: 1,
-    borderColor: '#F1B59A',
-  },
-  subLine: {
-    fontSize: 12.5,
-    color: colors.inkSoft,
-    marginBottom: 4,
-    fontFamily: 'IBMPlexSans_400Regular',
-  },
-  titleLine: {
-    fontSize: 14.5,
-    color: colors.ink,
-    fontFamily: 'IBMPlexSans_600SemiBold',
-  },
-  assistantTitleLine: {
-    fontFamily: 'IBMPlexSans_500Medium',
-  },
-  errorAssistantTitleLine: {
-    color: '#B5502A',
-  },
-  checkRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.line,
-    borderRadius: 16,
-    padding: 14,
-  },
-  checkbox: {
-    width: 20,
-    height: 20,
-    borderRadius: 6,
-    borderWidth: 2,
-    borderColor: colors.line,
-  },
-  checkRowText: {
-    fontSize: 13.5,
-    color: colors.ink,
-    fontFamily: 'IBMPlexSans_600SemiBold',
-  },
-  inputBarWrap: {
-    padding: 16,
-    backgroundColor: colors.bg,
-  },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  content: { flex: 1 },
+  contentInner: { padding: 16, gap: 10 },
+  card: { borderRadius: 16, padding: 14 },
+  userCard: { backgroundColor: colors.surfaceAlt },
+  assistantCard: { backgroundColor: colors.tealPale },
+  errorAssistantCard: { backgroundColor: '#FFF4EF', borderWidth: 1, borderColor: '#F1B59A' },
+  subLine: { fontSize: 12.5, color: colors.inkSoft, marginBottom: 4, fontFamily: 'IBMPlexSans_400Regular' },
+  titleLine: { fontSize: 14.5, color: colors.ink, fontFamily: 'IBMPlexSans_600SemiBold' },
+  assistantTitleLine: { fontFamily: 'IBMPlexSans_500Medium' },
+  errorAssistantTitleLine: { color: '#B5502A' },
+  inputBarWrap: { padding: 16, backgroundColor: colors.bg },
   voicebar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -843,23 +673,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
   },
-  playbtn: {
-  width: 30,
-  height: 30,
-  borderRadius: 15,
-  backgroundColor: colors.coral,
-  alignItems: 'center',
-  justifyContent: 'center',
-},
-playbtnActive: {
-  backgroundColor: '#B5502A',
-},
-  textInput: {
-    flex: 1,
-    fontSize: 14,
-    color: colors.ink,
-    fontFamily: 'IBMPlexSans_400Regular',
-  },
+  playbtn: { width: 30, height: 30, borderRadius: 15, backgroundColor: colors.coral, alignItems: 'center', justifyContent: 'center' },
+  playbtnActive: { backgroundColor: '#B5502A' },
+  textInput: { flex: 1, fontSize: 14, color: colors.ink, fontFamily: 'IBMPlexSans_400Regular' },
   bottomNav: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -870,18 +686,9 @@ playbtnActive: {
     borderTopWidth: 1,
     borderTopColor: colors.line,
   },
-  navItem: {
-    alignItems: 'center',
-    gap: 4,
-  },
-  navLabel: {
-    fontSize: 10.5,
-    color: colors.inkSoft,
-    fontFamily: 'IBMPlexSans_400Regular',
-  },
-  navMicWrap: {
-    marginTop: -28,
-  },
+  navItem: { alignItems: 'center', gap: 4 },
+  navLabel: { fontSize: 10.5, color: colors.inkSoft, fontFamily: 'IBMPlexSans_400Regular' },
+  navMicWrap: { marginTop: -28 },
   navMicBtn: {
     width: 52,
     height: 52,
