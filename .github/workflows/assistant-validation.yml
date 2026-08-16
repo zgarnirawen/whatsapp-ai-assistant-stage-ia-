@@ -26,7 +26,7 @@ jobs:
       - run: npm run build
 
   e2e:
-    if: ${{ secrets.E2E_BASE_URL != '' }}
+    if: ${{ vars.E2E_ENABLED == 'true' }}
     runs-on: ubuntu-latest
     defaults:
       run:
