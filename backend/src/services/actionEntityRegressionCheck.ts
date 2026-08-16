@@ -1,11 +1,13 @@
 import { normalizeActionEntities, type IntentResult } from "./intentDetection.js";
 
+const base = { language: "fr" as const, confidence: 1 };
+
 const cases: Array<{ name: string; input: IntentResult; expectedDuration?: number; expectedContact?: string }> = [
-  { name: "30 minutes", input: { intent: "create_event", durationMinutes: 30 }, expectedDuration: 30 },
-  { name: "one hour", input: { intent: "create_event", durationMinutes: 60 }, expectedDuration: 60 },
-  { name: "one hour thirty", input: { intent: "create_event", durationMinutes: 90 }, expectedDuration: 90 },
-  { name: "contact trimming", input: { intent: "create_event", contactName: "  Sara   Ben Ali  " }, expectedContact: "Sara Ben Ali" },
-  { name: "invalid duration", input: { intent: "create_event", durationMinutes: 0 }, expectedDuration: undefined },
+  { name: "30 minutes", input: { ...base, intent: "create_event", durationMinutes: 30 }, expectedDuration: 30 },
+  { name: "one hour", input: { ...base, intent: "create_event", durationMinutes: 60 }, expectedDuration: 60 },
+  { name: "one hour thirty", input: { ...base, intent: "create_event", durationMinutes: 90 }, expectedDuration: 90 },
+  { name: "contact trimming", input: { ...base, intent: "create_event", contactName: "  Sara   Ben Ali  " }, expectedContact: "Sara Ben Ali" },
+  { name: "invalid duration", input: { ...base, intent: "create_event", durationMinutes: 0 }, expectedDuration: undefined },
 ];
 
 const failures = cases.filter(({ input, expectedDuration, expectedContact }) => {
