@@ -5,6 +5,7 @@ import "dotenv/config";
 import { PrismaClient } from "../generated/prisma/client.js";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { detectIntent } from "./services/intentDetection.js";
+import { generateConversationalResponse } from "./services/conversationService.js";
 import { t, formatDate, formatDateRange } from "./i18n.js";
 import {
   createStubTask,
@@ -141,10 +142,19 @@ app.post("/assistant/message", async (req, res) => {
       },
     });
 
-    const lang = (result as any).language || 'fr';
+    const lang = result.language || "fr";
     let responseMessage: string | null = null;
-    if (["unrecognized","greeting","farewell","thanks","small_talk","capabilities"].includes(result.intent)) {
-      responseMessage = t(`conversational.${result.intent}`, lang as any);
+
+    // Conversational intents are generated dynamically by the LLM. Action intents
+    // remain deterministic so the assistant never claims an action happened before
+    // the user confirms it.
+    if (["unrecognized", "greeting", "farewell", "thanks", "small_talk", "capabilities"].includes(result.intent)) {
+      responseMessage = await generateConversationalResponse(inputText, {
+        intent: result.intent,
+        intentResult: result,
+        tasksCount: getStubTasks().length,
+        eventsCount: getStubEvents().length,
+      });
     }
 
     let modifyDeleteMessage: string | null = null;
@@ -158,10 +168,10 @@ app.post("/assistant/message", async (req, res) => {
 
       if (matches.length === 0) {
         modifyDeleteInfo = { status: "not_found", query: result.targetTitleQuery };
-        modifyDeleteMessage = t('modify.not_found', lang as any).replace('{query}', result.targetTitleQuery || '');
+        modifyDeleteMessage = t("modify.not_found", lang as any).replace("{query}", result.targetTitleQuery || "");
       } else if (matches.length > 1) {
         modifyDeleteInfo = { status: "ambiguous", matches };
-        modifyDeleteMessage = t('modify.ambiguous', lang as any).replace('{query}', result.targetTitleQuery || '');
+        modifyDeleteMessage = t("modify.ambiguous", lang as any).replace("{query}", result.targetTitleQuery || "");
       } else {
         modifyDeleteInfo = { status: "found", target: matches[0] };
       }
@@ -188,21 +198,22 @@ app.post("/assistant/message", async (req, res) => {
             }
           : null;
 
-    if (proposedAction && (proposedAction.intent === 'create_task' || proposedAction.intent === 'create_event')) {
-      if (proposedAction.intent === 'create_task') {
-        const title = (result as any).taskTitle || ((lang === 'fr') ? 'Tâche sans titre' : 'Untitled task');
-        confirmationMessage = t('confirmation.create_task', lang as any, { title });
+    if (proposedAction && (proposedAction.intent === "create_task" || proposedAction.intent === "create_event")) {
+      if (proposedAction.intent === "create_task") {
+        const title = result.taskTitle || (lang === "fr" ? "Tâche sans titre" : "Untitled task");
+        confirmationMessage = t("confirmation.create_task", lang as any, { title });
       } else {
-        const title = (result as any).eventTitle || ((lang === 'fr') ? 'Événement sans titre' : 'Untitled event');
-        const date = formatDate(lang as any, (result as any).eventDateTime);
-        confirmationMessage = t('confirmation.create_event', lang as any, { title, date });
+        const title = result.eventTitle || (lang === "fr" ? "Événement sans titre" : "Untitled event");
+        const date = formatDate(lang as any, result.eventDateTime);
+        confirmationMessage = t("confirmation.create_event", lang as any, { title, date });
       }
     }
+
     let summaryData = null;
     let summaryDataByDate: Record<string, { tasks: any[]; events: any[] }> | null = null;
-
     let summaryMessage: string | null = null;
     let summaryLabels: { tasks: string; events: string } | null = null;
+
     if (result.intent === "summarize_period") {
       const scope = result.summaryScope || "both";
 
@@ -219,8 +230,13 @@ app.post("/assistant/message", async (req, res) => {
           tasks: scope === "tasks" || scope === "both" ? getTasksInRange() : [],
           events: scope === "events" || scope === "both" ? getEventsInRange(result.summaryPeriodStart, result.summaryPeriodEnd) : [],
         };
-        summaryMessage = t('labels.summary_wrapper', lang as any, { range: formatDateRange(lang as any, result.summaryPeriodStart, result.summaryPeriodEnd) });
-        summaryLabels = { tasks: t('labels.tasks', lang as any), events: t('labels.events', lang as any) };
+        summaryMessage = t("labels.summary_wrapper", lang as any, {
+          range: formatDateRange(lang as any, result.summaryPeriodStart, result.summaryPeriodEnd),
+        });
+        summaryLabels = {
+          tasks: t("labels.tasks", lang as any),
+          events: t("labels.events", lang as any),
+        };
       }
     }
 
@@ -255,13 +271,13 @@ app.post("/assistant/confirm-action", async (req, res) => {
     }
 
     let createdItem;
-    const lang = details?.language || 'fr';
+    const lang = details?.language || "fr";
 
     if (intent === "create_task") {
-      const title = details?.taskTitle || ((lang === 'fr') ? 'Tâche sans titre' : 'Untitled task');
+      const title = details?.taskTitle || (lang === "fr" ? "Tâche sans titre" : "Untitled task");
       createdItem = createStubTask(title);
     } else if (intent === "create_event") {
-      const title = details?.eventTitle || ((lang === 'fr') ? 'Événement sans titre' : 'Untitled event');
+      const title = details?.eventTitle || (lang === "fr" ? "Événement sans titre" : "Untitled event");
       createdItem = createStubEvent(title, details.eventDateTime || new Date().toISOString());
     } else if (intent === "delete_task") {
       const success = deleteStubTask(targetId);
@@ -284,33 +300,44 @@ app.post("/assistant/confirm-action", async (req, res) => {
 
     let confirmationMessage: string | null = null;
     switch (intent) {
-      case 'create_task': {
-        confirmationMessage = createdItem && typeof createdItem === 'object' && 'title' in createdItem
-          ? t('confirmation.create_task', lang as any, { title: (createdItem as any).title })
-          : t('conversational.error', lang as any);
+      case "create_task": {
+        confirmationMessage = createdItem && typeof createdItem === "object" && "title" in createdItem
+          ? t("confirmation.create_task", lang as any, { title: (createdItem as any).title })
+          : t("conversational.error", lang as any);
         break;
       }
-      case 'create_event': {
-        confirmationMessage = createdItem && typeof createdItem === 'object' && 'dateTime' in createdItem
-          ? t('confirmation.create_event', lang as any, { title: (createdItem as any).title || '', date: formatDate(lang as any, (createdItem as any).dateTime) })
-          : t('conversational.error', lang as any);
+      case "create_event": {
+        confirmationMessage = createdItem && typeof createdItem === "object" && "dateTime" in createdItem
+          ? t("confirmation.create_event", lang as any, {
+              title: (createdItem as any).title || "",
+              date: formatDate(lang as any, (createdItem as any).dateTime),
+            })
+          : t("conversational.error", lang as any);
         break;
       }
-      case 'modify_task': {
-        confirmationMessage = createdItem && typeof createdItem === 'object' && 'title' in createdItem
-          ? t('confirmation.modify_task', lang as any, { title: (createdItem as any).title })
-          : t('conversational.error', lang as any);
+      case "modify_task": {
+        confirmationMessage = createdItem && typeof createdItem === "object" && "title" in createdItem
+          ? t("confirmation.modify_task", lang as any, { title: (createdItem as any).title })
+          : t("conversational.error", lang as any);
         break;
       }
-      case 'modify_event': {
-        confirmationMessage = createdItem && typeof createdItem === 'object' && 'title' in createdItem
-          ? t('confirmation.modify_event', lang as any, { title: (createdItem as any).title || '', date: formatDate(lang as any, (createdItem as any).dateTime) })
-          : t('conversational.error', lang as any);
+      case "modify_event": {
+        confirmationMessage = createdItem && typeof createdItem === "object" && "title" in createdItem
+          ? t("confirmation.modify_event", lang as any, {
+              title: (createdItem as any).title || "",
+              date: formatDate(lang as any, (createdItem as any).dateTime),
+            })
+          : t("conversational.error", lang as any);
         break;
       }
-      case 'delete_task': confirmationMessage = t('confirmation.delete_task', lang as any, { title: details?.taskTitle || '' }); break;
-      case 'delete_event': confirmationMessage = t('confirmation.delete_event', lang as any, { title: details?.eventTitle || '' }); break;
-      default: confirmationMessage = null;
+      case "delete_task":
+        confirmationMessage = t("confirmation.delete_task", lang as any, { title: details?.taskTitle || "" });
+        break;
+      case "delete_event":
+        confirmationMessage = t("confirmation.delete_event", lang as any, { title: details?.eventTitle || "" });
+        break;
+      default:
+        confirmationMessage = null;
     }
 
     res.json({ createdItem, updatedInteraction, confirmationMessage });
