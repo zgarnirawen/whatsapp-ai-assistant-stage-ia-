@@ -33,6 +33,67 @@ app.get("/", (req, res) => {
   res.send("Assistant IA backend is running.");
 });
 
+// Interaction persistence API.
+// The history endpoint is deliberately capped at 30 records to keep the payload small.
+app.get("/assistant/interactions", async (req, res) => {
+  try {
+    const parsedLimit = Number.parseInt(String(req.query.limit ?? "30"), 10);
+    const limit = Number.isFinite(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 30) : 30;
+
+    const interactions = await prisma.assistantInteraction.findMany({
+      take: limit,
+      orderBy: { createdAt: "desc" },
+    });
+
+    res.json(interactions);
+  } catch (error) {
+    console.error("Failed to fetch interaction history", error);
+    res.status(500).json({ error: "Failed to fetch interaction history" });
+  }
+});
+
+app.post("/assistant/interactions", async (req, res) => {
+  try {
+    const { inputText, inputMode, detectedIntent, actionTaken } = req.body;
+
+    if (typeof inputText !== "string" || !inputText.trim()) {
+      return res.status(400).json({ error: "inputText is required" });
+    }
+    if (typeof inputMode !== "string" || !inputMode.trim()) {
+      return res.status(400).json({ error: "inputMode is required" });
+    }
+
+    const interaction = await prisma.assistantInteraction.create({
+      data: {
+        inputText: inputText.trim(),
+        inputMode: inputMode.trim(),
+        detectedIntent: typeof detectedIntent === "string" ? detectedIntent : null,
+        actionTaken: typeof actionTaken === "string" ? actionTaken : null,
+      },
+    });
+
+    res.status(201).json(interaction);
+  } catch (error) {
+    console.error("Failed to create interaction", error);
+    res.status(500).json({ error: "Failed to create interaction" });
+  }
+});
+
+app.delete("/assistant/interactions/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await prisma.assistantInteraction.delete({ where: { id } });
+    res.status(204).send();
+  } catch (error: any) {
+    if (error?.code === "P2025") {
+      return res.status(404).json({ error: "Interaction not found" });
+    }
+    console.error("Failed to delete interaction", error);
+    res.status(500).json({ error: "Failed to delete interaction" });
+  }
+});
+
+// Backward-compatible development endpoints.
 app.post("/test-interaction", async (req, res) => {
   try {
     const interaction = await prisma.assistantInteraction.create({
@@ -52,6 +113,7 @@ app.post("/test-interaction", async (req, res) => {
 app.get("/test-interaction", async (req, res) => {
   try {
     const interactions = await prisma.assistantInteraction.findMany({
+      take: 30,
       orderBy: { createdAt: "desc" },
     });
     res.json(interactions);
@@ -81,14 +143,11 @@ app.post("/assistant/message", async (req, res) => {
 
     const lang = (result as any).language || 'fr';
     let responseMessage: string | null = null;
-    // conversational responses
     if (["unrecognized","greeting","farewell","thanks","small_talk","capabilities"].includes(result.intent)) {
       responseMessage = t(`conversational.${result.intent}`, lang as any);
     }
 
-    // modify/delete info bilingual message placeholder
     let modifyDeleteMessage: string | null = null;
-
     let modifyDeleteInfo: { status: string; query?: string; target?: any; matches?: any[] } | null = null;
 
     if (["modify_task", "delete_task", "modify_event", "delete_event"].includes(result.intent) && result.targetTitleQuery) {
@@ -129,7 +188,6 @@ app.post("/assistant/message", async (req, res) => {
             }
           : null;
 
-    // build confirmationMessage for create/modify/delete proposals
     if (proposedAction && (proposedAction.intent === 'create_task' || proposedAction.intent === 'create_event')) {
       if (proposedAction.intent === 'create_task') {
         const title = (result as any).taskTitle || ((lang === 'fr') ? 'Tâche sans titre' : 'Untitled task');
@@ -204,10 +262,7 @@ app.post("/assistant/confirm-action", async (req, res) => {
       createdItem = createStubTask(title);
     } else if (intent === "create_event") {
       const title = details?.eventTitle || ((lang === 'fr') ? 'Événement sans titre' : 'Untitled event');
-      createdItem = createStubEvent(
-        title,
-        details.eventDateTime || new Date().toISOString()
-      );
+      createdItem = createStubEvent(title, details.eventDateTime || new Date().toISOString());
     } else if (intent === "delete_task") {
       const success = deleteStubTask(targetId);
       createdItem = { id: targetId, deleted: !!success };
@@ -227,52 +282,35 @@ app.post("/assistant/confirm-action", async (req, res) => {
       data: { actionTaken: createdItem?.id || targetId },
     });
 
-    // add a bilingual confirmation message with proper narrowing and guards
     let confirmationMessage: string | null = null;
     switch (intent) {
       case 'create_task': {
-        if (createdItem && typeof createdItem === 'object' && 'title' in createdItem) {
-          confirmationMessage = t('confirmation.create_task', lang as any, { title: (createdItem as any).title });
-        } else {
-          confirmationMessage = t('conversational.error', lang as any);
-        }
+        confirmationMessage = createdItem && typeof createdItem === 'object' && 'title' in createdItem
+          ? t('confirmation.create_task', lang as any, { title: (createdItem as any).title })
+          : t('conversational.error', lang as any);
         break;
       }
       case 'create_event': {
-        if (createdItem && typeof createdItem === 'object' && 'dateTime' in createdItem) {
-          confirmationMessage = t('confirmation.create_event', lang as any, { title: (createdItem as any).title || '', date: formatDate(lang as any, (createdItem as any).dateTime) });
-        } else {
-          confirmationMessage = t('conversational.error', lang as any);
-        }
+        confirmationMessage = createdItem && typeof createdItem === 'object' && 'dateTime' in createdItem
+          ? t('confirmation.create_event', lang as any, { title: (createdItem as any).title || '', date: formatDate(lang as any, (createdItem as any).dateTime) })
+          : t('conversational.error', lang as any);
         break;
       }
       case 'modify_task': {
-        if (createdItem && typeof createdItem === 'object' && 'title' in createdItem) {
-          confirmationMessage = t('confirmation.modify_task', lang as any, { title: (createdItem as any).title });
-        } else {
-          confirmationMessage = t('conversational.error', lang as any);
-        }
+        confirmationMessage = createdItem && typeof createdItem === 'object' && 'title' in createdItem
+          ? t('confirmation.modify_task', lang as any, { title: (createdItem as any).title })
+          : t('conversational.error', lang as any);
         break;
       }
       case 'modify_event': {
-        if (createdItem && typeof createdItem === 'object' && 'title' in createdItem) {
-          confirmationMessage = t('confirmation.modify_event', lang as any, { title: (createdItem as any).title || '', date: formatDate(lang as any, (createdItem as any).dateTime) });
-        } else {
-          confirmationMessage = t('conversational.error', lang as any);
-        }
+        confirmationMessage = createdItem && typeof createdItem === 'object' && 'title' in createdItem
+          ? t('confirmation.modify_event', lang as any, { title: (createdItem as any).title || '', date: formatDate(lang as any, (createdItem as any).dateTime) })
+          : t('conversational.error', lang as any);
         break;
       }
-      case 'delete_task': {
-        confirmationMessage = t('confirmation.delete_task', lang as any, { title: details?.taskTitle || '' });
-        break;
-      }
-      case 'delete_event': {
-        confirmationMessage = t('confirmation.delete_event', lang as any, { title: details?.eventTitle || '' });
-        break;
-      }
-      default: {
-        confirmationMessage = null;
-      }
+      case 'delete_task': confirmationMessage = t('confirmation.delete_task', lang as any, { title: details?.taskTitle || '' }); break;
+      case 'delete_event': confirmationMessage = t('confirmation.delete_event', lang as any, { title: details?.eventTitle || '' }); break;
+      default: confirmationMessage = null;
     }
 
     res.json({ createdItem, updatedInteraction, confirmationMessage });
@@ -281,17 +319,15 @@ app.post("/assistant/confirm-action", async (req, res) => {
     res.status(500).json({ error: "Failed to confirm action" });
   }
 });
+
 app.post("/assistant/transcribe", upload.single("audio"), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: "No audio file provided" });
-    }
+    if (!req.file) return res.status(400).json({ error: "No audio file provided" });
 
     const groq = new (await import("groq-sdk")).default({ apiKey: process.env.GROQ_API_KEY });
-
-const file = new File([new Uint8Array(req.file.buffer)], "audio.m4a", { type: req.file.mimetype });
+    const file = new File([new Uint8Array(req.file.buffer)], "audio.m4a", { type: req.file.mimetype });
     const transcription = await groq.audio.transcriptions.create({
-      file: file,
+      file,
       model: "whisper-large-v3",
       language: "fr",
     });
