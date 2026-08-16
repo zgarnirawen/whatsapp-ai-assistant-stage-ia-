@@ -2,7 +2,11 @@ import Groq from "groq-sdk";
 import { INTENT_PATTERNS } from "./intentPatterns.js";
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-export const DEFAULT_INTENT_CONFIDENCE_THRESHOLD = 0.6;
+const configuredThreshold = Number(process.env.INTENT_CONFIDENCE_THRESHOLD);
+export const DEFAULT_INTENT_CONFIDENCE_THRESHOLD =
+  Number.isFinite(configuredThreshold) && configuredThreshold >= 0 && configuredThreshold <= 1
+    ? configuredThreshold
+    : 0.6;
 
 export type DetectedIntent =
   | "create_task"
