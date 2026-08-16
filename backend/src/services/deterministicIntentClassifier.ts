@@ -8,14 +8,14 @@ const rules: Array<{ intent: RegressionIntent; patterns: RegExp[] }> = [
   { intent: "delete_event", patterns: [/\b(?:supprime|supprimer|enlève|enleve|efface|effacer)\b/i, /\b(?:rdv|rendez[- ]vous|agenda)\b/i] },
   { intent: "modify_task", patterns: [/\b(?:modifie|modifier|renomme|renommer|change|changer)\b/i, /\b(?:tache|tâche)\b/i] },
   { intent: "modify_event", patterns: [/\b(?:modifie|modifier|change|changer)\b/i, /\b(?:rdv|rendez[- ]vous)\b/i] },
-  { intent: "create_event", patterns: [/\b(?:rdv|rendez[- ]vous|agenda|calendrier|bloque|réunion|reunion)\b/i] },
-  { intent: "create_task", patterns: [/\b(?:tache|tâche|rappel|rappelle|n'oublie|n’oublie|faut que|faire)\b/i] },
-  { intent: "summarize_period", patterns: [/(?:planning|agenda|rendez[- ]vous|rdv|taches|tâches|semaine|demain)/i, /(?:resume|résume|résumé|montre|voir|qu'est[- ]ce que j'ai|qu’est[- ]ce que j’ai)/i] },
+  { intent: "create_event", patterns: [/(?:\brdv\b|\brendez[- ]vous\b|\bagenda\b|\bcalendrier\b|\bbloque\b|\bréunion\b|\breunion\b|\bprogramme\b|\bplanifie\b|\bréserve\b|\breserve\b)/i] },
+  { intent: "create_task", patterns: [/(?:\btache\b|\btâche\b|\brappel\b|\brappelle\b|n'oublie|n’oublie|\bfaut que\b|\bajoute?\b.*\btache\b|\bcrée?\b.*\btache\b)/i] },
+  { intent: "summarize_period", patterns: [/(?:planning|agenda|rendez[- ]vous|rdv|taches|tâches|semaine|demain|aujourd'hui|aujourd’hui|calendrier)/i, /(?:resume|résume|résumé|montre|voir|qu'est[- ]ce que j'ai|qu’est[- ]ce que j’ai|quel est|fais moi|faire le résumé)/i] },
   { intent: "greeting", patterns: [/^\s*(?:bonjour|salut|coucou|hello|hey)\b/i] },
   { intent: "farewell", patterns: [/\b(?:au revoir|bye|à plus|a plus)\b/i] },
   { intent: "thanks", patterns: [/\b(?:merci|thanks)\b/i] },
-  { intent: "small_talk", patterns: [/\b(?:ça va|ca va)\b/i] },
-  { intent: "capabilities", patterns: [/(?:que peux[- ]tu|tu peux m'aider|tu peux m’aider|comment tu peux m'aider|comment tu peux m’aider|aide[- ]moi)/i] },
+  { intent: "small_talk", patterns: [/\b(?:ça va|ca va|comment ça va|comment ca va)\b/i] },
+  { intent: "capabilities", patterns: [/(?:que peux[- ]tu|tu peux m'aider|tu peux m’aider|comment tu peux m'aider|comment tu peux m’aider|aide[- ]moi|qu'est[- ]ce que tu sais faire|quelles actions peux[- ]tu faire)/i] },
 ];
 
 export function detectIntentForRegression(input: string): RegressionIntent {
