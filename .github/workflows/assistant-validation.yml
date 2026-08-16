@@ -1,0 +1,52 @@
+name: Assistant validation
+
+on:
+  pull_request:
+    paths:
+      - "backend/**"
+      - "docs/e2e-test-plan-4180.md"
+      - ".github/workflows/assistant-validation.yml"
+  workflow_dispatch:
+
+jobs:
+  backend-build-and-regression:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npm run build
+
+  e2e:
+    if: ${{ secrets.E2E_BASE_URL != '' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - run: npm run test:e2e
+        env:
+          E2E_BASE_URL: ${{ secrets.E2E_BASE_URL }}
+          E2E_TIMEOUT_MS: ${{ secrets.E2E_TIMEOUT_MS || '15000' }}
+      - name: Upload E2E report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: assistant-e2e-report
+          path: backend/test-results/e2e-report.json
+          if-no-files-found: ignore
