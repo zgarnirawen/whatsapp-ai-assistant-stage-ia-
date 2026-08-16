@@ -1,3 +1,2 @@
-services:
-  # SQLite is file-based and does not require a database container.
-  # The backend stores the Prisma database in backend/prisma/dev.db.
+# SQLite is file-based and does not require a database container.
+services: {}
