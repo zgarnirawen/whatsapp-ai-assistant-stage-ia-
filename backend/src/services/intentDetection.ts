@@ -65,7 +65,7 @@ const tools: Groq.Chat.Completions.ChatCompletionTool[] = [{
       required: ["intent", "language", "confidence"],
     },
   },
-];
+}];
 
 export async function detectIntent(inputText: string): Promise<IntentResult> {
   const today = new Date().toISOString().split("T")[0];
