@@ -1,6 +1,7 @@
 import Groq from "groq-sdk";
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+const INTENT_CONFIDENCE_THRESHOLD = 0.6;
 
 export type DetectedIntent =
   | "create_task"
@@ -20,6 +21,7 @@ export type DetectedIntent =
 export interface IntentResult {
   intent: DetectedIntent;
   language?: "fr" | "en";
+  confidence?: number;
   taskTitle?: string;
   eventTitle?: string;
   eventDateTime?: string;
@@ -32,13 +34,14 @@ export interface IntentResult {
   newEventTitle?: string;
   newEventDateTime?: string;
 }
+
 const tools: Groq.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
       name: "classify_intent",
       description:
-        "Classify the user's message into one of the supported assistant intents and extract relevant details.",
+        "Classify the user's message into one of the supported assistant intents, extract relevant details, and provide a confidence score from 0 to 1.",
       parameters: {
         type: "object",
         properties: {
@@ -60,43 +63,47 @@ const tools: Groq.Chat.Completions.ChatCompletionTool[] = [
               "unrecognized",
             ],
             description:
-              "The detected intent. Use 'unrecognized' only for genuinely off-topic requests (weather, general knowledge, gibberish).",
+              "The detected intent. Use 'unrecognized' for genuinely off-topic, impossible to interpret, or very low-confidence requests.",
           },
           language: {
             type: "string",
             enum: ["fr", "en"],
             description: "The language the user's message is written in, detected from the wording itself",
           },
-
+          confidence: {
+            type: "number",
+            minimum: 0,
+            maximum: 1,
+            description: "Confidence in the selected intent, from 0 to 1. Use a lower value when the wording is ambiguous or the intent is unclear.",
+          },
           taskTitle: {
             type: "string",
             description: "Title of the task, only if intent is create_task.",
           },
           targetTitleQuery: {
-  type: "string",
-  description:
-    "Only for modify_task, delete_task, modify_event, delete_event. The title or description the user used to refer to the item they want to modify/delete (e.g. 'la tâche appeler le fournisseur' → 'appeler le fournisseur').",
-},
-newTaskTitle: {
-  type: "string",
-  description: "Only for modify_task. The new title for the task, if the user wants to rename it.",
-},
-newEventTitle: {
-  type: "string",
-  description: "Only for modify_event. The new title for the event, if provided.",
-},
-newEventDateTime: {
-  type: "string",
-  description: "Only for modify_event. The new date/time for the event, ISO 8601, if provided.",
-},
+            type: "string",
+            description:
+              "Only for modify_task, delete_task, modify_event, delete_event. The title or description the user used to refer to the item they want to modify/delete.",
+          },
+          newTaskTitle: {
+            type: "string",
+            description: "Only for modify_task. The new title for the task, if the user wants to rename it.",
+          },
+          newEventTitle: {
+            type: "string",
+            description: "Only for modify_event. The new title for the event, if provided.",
+          },
+          newEventDateTime: {
+            type: "string",
+            description: "Only for modify_event. The new date/time for the event, ISO 8601, if provided.",
+          },
           eventTitle: {
             type: "string",
             description: "Title of the event/appointment, only if intent is create_event.",
           },
           eventDateTime: {
             type: "string",
-            description:
-              "ISO 8601 date/time if mentioned or inferable, only if intent is create_event.",
+            description: "ISO 8601 date/time if mentioned or inferable, only if intent is create_event.",
           },
           summaryPeriodStart: {
             type: "string",
@@ -107,19 +114,17 @@ newEventDateTime: {
             description: "ISO 8601 end date, only if intent is summarize_period.",
           },
           summaryScope: {
-  type: "string",
-  enum: ["tasks", "events", "both"],
-  description:
-    "Only for summarize_period. What the user wants summarized: 'tasks' if they said taches/tâches specifically, 'events' if they said rendez-vous/agenda/réunions specifically, 'both' if unspecified or they asked for a general summary.",
-},
-summaryDates: {
-  type: "array",
-  items: { type: "string" },
-  description:
-    "Only for summarize_period, when the user mentions multiple SPECIFIC non-contiguous days (e.g. 'demain et hier', 'lundi et mercredi'). List each date in ISO format (YYYY-MM-DD). Do NOT use this for a single continuous range like 'cette semaine' — use summaryPeriodStart/End for that instead. If summaryDates is used, leave summaryPeriodStart/End empty.",
-},
+            type: "string",
+            enum: ["tasks", "events", "both"],
+            description: "Only for summarize_period. What the user wants summarized: tasks, events, or both.",
+          },
+          summaryDates: {
+            type: "array",
+            items: { type: "string" },
+            description: "Only for summarize_period, when multiple specific non-contiguous days are mentioned.",
+          },
         },
-        required: ["intent", "language"],
+        required: ["intent", "language", "confidence"],
       },
     },
   },
@@ -129,52 +134,38 @@ export async function detectIntent(inputText: string): Promise<IntentResult> {
   const today = new Date().toISOString().split("T")[0];
 
   const completion = await groq.chat.completions.create({
-    model:"llama-3.3-70b-versatile",
+    model: "llama-3.3-70b-versatile",
     messages: [
       {
         role: "system",
         content: `You are an intent classifier for a voice/text assistant embedded in a productivity app (tasks, agenda, calls, files). Today's date is ${today} (${new Date().toLocaleDateString('fr-FR', { weekday: 'long' })}).
 
-      When the user refers to "cette semaine" (this week), the range MUST include today and MUST NOT be entirely in the past. Interpret "cette semaine" as Monday through Sunday of the CURRENT week that contains today's date — never a past week. Double check: today's date must fall within or before the end of the computed range.
+Be GENEROUS and FLEXIBLE with valid productivity requests. Real users speak casually, with typos, missing words, abbreviations, and voice-to-text errors. Do not require exact or grammatically perfect phrasing.
 
-      Be GENEROUS and FLEXIBLE in matching intent — real users speak casually, with typos, missing words, and varied phrasing (especially via voice-to-text). Do not require exact or grammatically perfect phrasing. Focus on the underlying meaning, not exact wording.
+Supported intents:
+- greeting: salutations such as "bonjour", "salut", "coucou", "hey".
+- farewell: goodbyes such as "au revoir", "bye", "à plus".
+- thanks: expressions of gratitude such as "merci".
+- small_talk: casual conversation such as "ça va ?".
+- capabilities: questions about what the assistant can do.
+- create_task: requests to create/add/remind a task.
+- create_event: requests to schedule/create an appointment or event.
+- modify_task/delete_task/modify_event/delete_event: requests to change or remove an existing item.
+- summarize_period: requests for tasks/events/planning summaries.
+- unrecognized: genuinely off-topic requests, gibberish, or messages whose intended action cannot reasonably be determined.
 
-      Map user messages to these intents when appropriate:
-      - "greeting": brief salutations such as "bonjour", "salut", "coucou", "hey". Reply with a friendly welcome but do not treat as an error.
-      - "farewell": goodbyes like "au revoir", "bye", "à plus".
-      - "thanks": expressions of gratitude such as "merci", "merci beaucoup".
-      - "small_talk": casual conversational phrases not related to tasks/agenda, e.g. "ça va ?", "comment tu vas ?", or brief chit-chat. These are NOT "unrecognized"; classify them as "small_talk".
-      - "capabilities": user asking what the assistant can do, e.g. "qu'est-ce que tu sais faire", "aide-moi", "comment ça marche". Classify as "capabilities".
+For valid but informal requests, prefer the closest supported intent and give a confidence of at least 0.7 when the meaning is reasonably clear. Give confidence below 0.6 only when the intent is genuinely unclear. Always call classify_intent.
 
-      Examples of phrasings that should map to "summarize_period":
-      - "resume moi mes taches"
-      - "resume mes taches"
-      - "resume ma semaine"
-      - "fais moi un resume"
-      - "qu'est-ce que j'ai cette semaine"
-      - "montre moi mon planning"
-
-      Examples that should map to "create_task":
-      - "cree une tache pour X"
-      - "ajoute une tache X"
-      - "n'oublie pas de X"
-      - "il faut que je X"
-
-      Examples that should map to "create_event":
-      - "programme un rdv avec X"
-      - "ajoute un rendez-vous X"
-      - "bloque du temps pour X"
-
-      Examples for modify/delete intents: user wants to change or remove an existing task/event (e.g. "modifie la tâche X", "supprime la tâche X", "annule la tâche X"). Extract "targetTitleQuery" and possible new titles/datetimes when present.
-
-      Only use "unrecognized" when the message is genuinely unrelated to the assistant's scope (weather requests, general knowledge questions, or gibberish). Do NOT map greetings, thanks, small talk, or capability-questions to "unrecognized".
-
-      Always call the classify_intent function with your best classification.`,
+Examples:
+- "n'oublie pas d'appeler sam" -> create_task
+- "mets moi un rdv demain avec sara" -> create_event
+- "supprime le truc appeler le fournisseur" -> delete_task
+- "qu'est-ce que j'ai cette semaine" -> summarize_period
+- "aide moi" -> capabilities
+- "il fait combien dehors" -> unrecognized
+`,
       },
-      {
-        role: "user",
-        content: inputText,
-      },
+      { role: "user", content: inputText },
     ],
     tools,
     tool_choice: { type: "function", function: { name: "classify_intent" } },
@@ -182,14 +173,16 @@ export async function detectIntent(inputText: string): Promise<IntentResult> {
 
   const toolCall = completion.choices[0]?.message?.tool_calls?.[0];
 
-  if (!toolCall) {
-    return { intent: "unrecognized" };
-  }
+  if (!toolCall) return { intent: "unrecognized", confidence: 0 };
 
   try {
-    const args = JSON.parse(toolCall.function.arguments);
-    return args as IntentResult;
+    const args = JSON.parse(toolCall.function.arguments) as IntentResult;
+    const confidence = Math.max(0, Math.min(1, Number(args.confidence)));
+    if (!Number.isFinite(confidence) || confidence < INTENT_CONFIDENCE_THRESHOLD) {
+      return { intent: "unrecognized", language: args.language, confidence: Number.isFinite(confidence) ? confidence : 0 };
+    }
+    return { ...args, confidence };
   } catch {
-    return { intent: "unrecognized" };
+    return { intent: "unrecognized", confidence: 0 };
   }
 }

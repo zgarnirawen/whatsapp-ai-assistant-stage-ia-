@@ -28,6 +28,7 @@ import {
 } from '@expo-google-fonts/ibm-plex-sans';
 import ActionProposal from '@/components/ActionProposal';
 import type { ActionProposalData } from '@/components/ActionProposal';
+import QuickActionShortcuts from '@/components/QuickActionShortcuts';
 
 const API_BASE_URL = Platform.OS === 'web' ? 'http://localhost:3000' : 'http://10.224.58.5:3000';
 
@@ -159,6 +160,8 @@ export default function HomeScreen() {
   const [pendingAction, setPendingAction] = useState<ProposedAction | null>(null);
   const [pendingClarification, setPendingClarification] = useState<ClarificationState | null>(null);
   const [awaitingPeriodClarification, setAwaitingPeriodClarification] = useState<string | null>(null);
+  const [showQuickActions, setShowQuickActions] = useState(false);
+  const [quickActionsLanguage, setQuickActionsLanguage] = useState<Lang>('fr');
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [isRecording, setIsRecording] = useState(false);
@@ -331,6 +334,7 @@ export default function HomeScreen() {
       const text = (overrideText ?? inputText).trim();
       if (!text) return;
       const normalizedText = text.toLowerCase();
+      setShowQuickActions(false);
 
       if (pendingClarification) {
         const userMessage: ChatMessage = {
@@ -408,7 +412,11 @@ export default function HomeScreen() {
         const detectedLanguage = getLang(result?.language);
         let assistantText = responseMessage;
 
-        if (proposedAction) {
+        if (result?.intent === 'unrecognized') {
+          setQuickActionsLanguage(detectedLanguage);
+          setShowQuickActions(true);
+          assistantText = responseMessage || UI_TEXT[detectedLanguage].actionFallback;
+        } else if (proposedAction) {
           if (proposedAction.intent === 'create_task') {
             setPendingAction({ ...proposedAction, language: detectedLanguage });
             assistantText = UI_TEXT[detectedLanguage].createTaskConfirm(proposedAction.details.taskTitle);
@@ -570,6 +578,13 @@ export default function HomeScreen() {
               </Text>
             </View>
           )
+        )}
+
+        {showQuickActions && (
+          <QuickActionShortcuts
+            language={quickActionsLanguage}
+            onSelect={(prompt) => sendMessage('text', prompt)}
+          />
         )}
 
         {pendingAction && (
