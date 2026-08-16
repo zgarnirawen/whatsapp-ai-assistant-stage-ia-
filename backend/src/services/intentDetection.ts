@@ -25,6 +25,8 @@ export interface IntentResult {
   taskTitle?: string;
   eventTitle?: string;
   eventDateTime?: string;
+  durationMinutes?: number;
+  contactName?: string;
   summaryPeriodStart?: string;
   summaryPeriodEnd?: string;
   summaryScope?: 'tasks' | 'events' | 'both';
@@ -41,7 +43,7 @@ const tools: Groq.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "classify_intent",
       description:
-        "Classify the user's message into one of the supported assistant intents, extract relevant details, and provide a confidence score from 0 to 1.",
+        "Classify the user's message into one of the supported assistant intents, extract relevant action entities, and provide a confidence score from 0 to 1.",
       parameters: {
         type: "object",
         properties: {
@@ -78,7 +80,7 @@ const tools: Groq.Chat.Completions.ChatCompletionTool[] = [
           },
           taskTitle: {
             type: "string",
-            description: "Title of the task, only if intent is create_task.",
+            description: "Title/name of the task, only if intent is create_task.",
           },
           targetTitleQuery: {
             type: "string",
@@ -99,11 +101,23 @@ const tools: Groq.Chat.Completions.ChatCompletionTool[] = [
           },
           eventTitle: {
             type: "string",
-            description: "Title of the event/appointment, only if intent is create_event.",
+            description: "Title/name of the event or appointment, only if intent is create_event.",
           },
           eventDateTime: {
             type: "string",
             description: "ISO 8601 date/time if mentioned or inferable, only if intent is create_event.",
+          },
+          durationMinutes: {
+            type: "integer",
+            minimum: 1,
+            maximum: 1440,
+            description:
+              "Duration of the requested task/event in minutes when the user mentions a duration, for example 30 minutes, 1 hour, or 1h30. Omit when no duration is given.",
+          },
+          contactName: {
+            type: "string",
+            description:
+              "Person/contact explicitly associated with the requested task or event, for example 'avec Sara' or 'appeler Sam'. Preserve the person's name without inventing contact information.",
           },
           summaryPeriodStart: {
             type: "string",
@@ -142,6 +156,8 @@ export async function detectIntent(inputText: string): Promise<IntentResult> {
 
 Be GENEROUS and FLEXIBLE with valid productivity requests. Real users speak casually, with typos, missing words, abbreviations, and voice-to-text errors. Do not require exact or grammatically perfect phrasing.
 
+Extract action entities whenever they are explicitly present. Never invent a contact, duration, date, or name. For duration, normalize to minutes (30 minutes = 30, 1 hour = 60, 1h30 = 90). For contacts, extract only the person's name stated by the user; do not infer a phone number or other private contact data.
+
 Supported intents:
 - greeting: salutations such as "bonjour", "salut", "coucou", "hey".
 - farewell: goodbyes such as "au revoir", "bye", "à plus".
@@ -157,8 +173,9 @@ Supported intents:
 For valid but informal requests, prefer the closest supported intent and give a confidence of at least 0.7 when the meaning is reasonably clear. Give confidence below 0.6 only when the intent is genuinely unclear. Always call classify_intent.
 
 Examples:
-- "n'oublie pas d'appeler sam" -> create_task
-- "mets moi un rdv demain avec sara" -> create_event
+- "n'oublie pas d'appeler sam" -> create_task, contactName="sam"
+- "mets moi un rdv demain avec sara pendant 1h30" -> create_event, contactName="sara", durationMinutes=90
+- "réunion avec Nadia mardi à 10h pour 45 minutes" -> create_event, contactName="Nadia", durationMinutes=45
 - "supprime le truc appeler le fournisseur" -> delete_task
 - "qu'est-ce que j'ai cette semaine" -> summarize_period
 - "aide moi" -> capabilities
