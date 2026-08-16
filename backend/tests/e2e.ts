@@ -2,6 +2,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 
 const BASE_URL = (process.env.E2E_BASE_URL || "http://localhost:3000").replace(/\/$/, "");
 const TIMEOUT_MS = Number.parseInt(process.env.E2E_TIMEOUT_MS || "15000", 10);
+const MIN_SCENARIOS = Number.parseInt(process.env.E2E_MIN_SCENARIOS || "20", 10);
+const MAX_ERROR_RATE_PERCENT = Number.parseFloat(process.env.E2E_MAX_ERROR_RATE_PERCENT || "10");
 
 type Scenario = { id: string; name: string; run: (client: E2EClient) => Promise<void> };
 type Result = { id: string; name: string; status: "PASS" | "FAIL"; durationMs: number; error?: string };
@@ -74,6 +76,8 @@ async function main() {
   const results: Result[] = [];
   console.log(`E2E target: ${BASE_URL}`);
   console.log(`Scenarios: ${scenarios.length}`);
+  assert(scenarios.length >= MIN_SCENARIOS, `minimum scenario count is ${MIN_SCENARIOS}, found ${scenarios.length}`);
+
   for (const scenario of scenarios) {
     const started = performance.now();
     try {
@@ -86,16 +90,38 @@ async function main() {
       console.error(`✗ ${scenario.id} ${scenario.name}: ${message}`);
     }
   }
+
   const durations = results.map(r => r.durationMs).sort((a, b) => a - b);
   const percentile = (p: number) => durations.length ? durations[Math.min(durations.length - 1, Math.ceil((p / 100) * durations.length) - 1)] : 0;
   const passed = results.filter(r => r.status === "PASS").length;
   const failed = results.length - passed;
-  const report = { generatedAt: new Date().toISOString(), baseUrl: BASE_URL, scenarioCount: scenarios.length, passed, failed, errorRatePercent: Number(((failed / scenarios.length) * 100).toFixed(1)), latencyMs: { min: Math.min(...durations), average: Math.round(durations.reduce((a, b) => a + b, 0) / Math.max(durations.length, 1)), p95: percentile(95), max: Math.max(...durations) }, results };
+  const errorRatePercent = Number(((failed / scenarios.length) * 100).toFixed(1));
+  const report = {
+    generatedAt: new Date().toISOString(),
+    baseUrl: BASE_URL,
+    scenarioCount: scenarios.length,
+    passed,
+    failed,
+    errorRatePercent,
+    thresholds: { minScenarios: MIN_SCENARIOS, maxErrorRatePercent: MAX_ERROR_RATE_PERCENT },
+    thresholdStatus: { scenarioCount: scenarios.length >= MIN_SCENARIOS, errorRate: errorRatePercent <= MAX_ERROR_RATE_PERCENT },
+    latencyMs: {
+      min: Math.min(...durations),
+      average: Math.round(durations.reduce((a, b) => a + b, 0) / Math.max(durations.length, 1)),
+      p95: percentile(95),
+      max: Math.max(...durations),
+    },
+    results,
+  };
+
   await mkdir("test-results", { recursive: true });
   await writeFile("test-results/e2e-report.json", JSON.stringify(report, null, 2));
-  console.log(`\nResult: ${passed}/${scenarios.length} passed; error rate ${report.errorRatePercent}%`);
+  console.log(`\nResult: ${passed}/${scenarios.length} passed; error rate ${errorRatePercent}% (max ${MAX_ERROR_RATE_PERCENT}%)`);
   console.log(`Latency: avg ${report.latencyMs.average}ms | p95 ${report.latencyMs.p95}ms | max ${report.latencyMs.max}ms`);
-  if (failed > 0) process.exitCode = 1;
+
+  if (failed > 0 || errorRatePercent > MAX_ERROR_RATE_PERCENT) {
+    process.exitCode = 1;
+  }
 }
 
 main().catch(error => { console.error("E2E runner failed:", error); process.exitCode = 1; });
