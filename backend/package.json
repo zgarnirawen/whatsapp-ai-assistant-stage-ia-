@@ -5,7 +5,7 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "test": "tsx src/services/intentFallbackCheck.ts",
+    "test": "tsx src/services/intentFallbackCheck.ts && tsx src/services/conversationFallbackCheck.ts",
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js"
