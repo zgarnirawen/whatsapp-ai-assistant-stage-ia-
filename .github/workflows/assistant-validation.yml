@@ -26,12 +26,16 @@ jobs:
       - run: npm run build
       - name: Run offline fallback regression suite
         run: npx tsx src/services/fallbackRegressionCheck.ts
-      - name: Upload fallback regression report
+      - name: Run offline intent recognition regression suite
+        run: npx tsx src/services/intentRecognitionRegressionCheck.ts
+      - name: Upload validation reports
         if: always()
         uses: actions/upload-artifact@v5
         with:
-          name: fallback-regression-report
-          path: backend/test-results/fallback-report.json
+          name: assistant-regression-reports
+          path: |
+            backend/test-results/fallback-report.json
+            backend/test-results/intent-recognition-report.json
           if-no-files-found: error
 
   e2e:
