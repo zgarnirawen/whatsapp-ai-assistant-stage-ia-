@@ -19,7 +19,9 @@ const OUT_OF_SCOPE_CASES = [
   "what is the latest stock price?",
 ] as const;
 
-const THRESHOLD_CANDIDATES = [0.5, 0.55, 0.6, 0.65, 0.7] as const;
+const THRESHOLD_CANDIDATES = Array.from(
+  new Set([0.5, 0.55, 0.6, 0.65, 0.7, DEFAULT_INTENT_CONFIDENCE_THRESHOLD]),
+).sort((a, b) => a - b);
 const MAX_FALSE_FALLBACK_RATE = 10;
 const MAX_FALSE_POSITIVE_RATE = 20;
 
@@ -73,7 +75,7 @@ function evaluateThreshold(results: RawResult[], threshold: number) {
   const falseFallbackRate = percentage(falseFallbacks, inScope.length);
   const falsePositiveRate = percentage(falsePositives, outOfScope.length);
 
-  // Favor in-scope accuracy while strongly penalizing unsafe over-acceptance and fallbacks.
+  // Favor in-scope accuracy while strongly penalizing over-acceptance and fallbacks.
   const score = accuracy - falseFallbackRate * 0.5 - falsePositiveRate * 0.75;
 
   return { threshold, accuracy, falseFallbackRate, falsePositiveRate, score };
@@ -133,7 +135,9 @@ async function main() {
   }
 
   const failures = results.filter((result) => {
-    if (result.expected === undefined) return applyThreshold(result, DEFAULT_INTENT_CONFIDENCE_THRESHOLD) !== "unrecognized";
+    if (result.expected === undefined) {
+      return applyThreshold(result, DEFAULT_INTENT_CONFIDENCE_THRESHOLD) !== "unrecognized";
+    }
     return applyThreshold(result, DEFAULT_INTENT_CONFIDENCE_THRESHOLD) !== result.expected;
   });
 
