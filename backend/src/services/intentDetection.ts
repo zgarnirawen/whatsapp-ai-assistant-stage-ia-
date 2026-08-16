@@ -1,7 +1,8 @@
 import Groq from "groq-sdk";
+import { INTENT_PATTERNS } from "./intentPatterns.js";
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-const INTENT_CONFIDENCE_THRESHOLD = 0.6;
+export const DEFAULT_INTENT_CONFIDENCE_THRESHOLD = 0.6;
 
 export type DetectedIntent =
   | "create_task"
@@ -27,7 +28,7 @@ export interface IntentResult {
   eventDateTime?: string;
   summaryPeriodStart?: string;
   summaryPeriodEnd?: string;
-  summaryScope?: 'tasks' | 'events' | 'both';
+  summaryScope?: "tasks" | "events" | "both";
   summaryDates?: string[];
   targetTitleQuery?: string;
   newTaskTitle?: string;
@@ -74,7 +75,8 @@ const tools: Groq.Chat.Completions.ChatCompletionTool[] = [
             type: "number",
             minimum: 0,
             maximum: 1,
-            description: "Confidence in the selected intent, from 0 to 1. Use a lower value when the wording is ambiguous or the intent is unclear.",
+            description:
+              "Confidence in the selected intent, from 0 to 1. Use a lower value when the wording is ambiguous or the intent is unclear.",
           },
           taskTitle: {
             type: "string",
@@ -130,7 +132,21 @@ const tools: Groq.Chat.Completions.ChatCompletionTool[] = [
   },
 ];
 
-export async function detectIntent(inputText: string): Promise<IntentResult> {
+const patternGuidance = INTENT_PATTERNS
+  .map(({ intent, examples }) => `- ${intent}: "${examples[0]}"`)
+  .join("\n");
+
+function normalizeConfidence(value: unknown): number {
+  const confidence = Number(value);
+  return Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0;
+}
+
+/**
+ * Calls the NLU model once and returns its raw confidence.
+ * Thresholding is intentionally kept outside this function so evaluation can
+ * compare several thresholds without paying for repeated API calls.
+ */
+export async function classifyIntent(inputText: string): Promise<IntentResult> {
   const today = new Date().toISOString().split("T")[0];
 
   const completion = await groq.chat.completions.create({
@@ -138,15 +154,15 @@ export async function detectIntent(inputText: string): Promise<IntentResult> {
     messages: [
       {
         role: "system",
-        content: `You are an intent classifier for a voice/text assistant embedded in a productivity app (tasks, agenda, calls, files). Today's date is ${today} (${new Date().toLocaleDateString('fr-FR', { weekday: 'long' })}).
+        content: `You are an intent classifier for a voice/text assistant embedded in a productivity app (tasks, agenda, calls, files). Today's date is ${today} (${new Date().toLocaleDateString("fr-FR", { weekday: "long" })}).
 
 Be GENEROUS and FLEXIBLE with valid productivity requests. Real users speak casually, with typos, missing words, abbreviations, and voice-to-text errors. Do not require exact or grammatically perfect phrasing.
 
 Supported intents:
-- greeting: salutations such as "bonjour", "salut", "coucou", "hey".
-- farewell: goodbyes such as "au revoir", "bye", "à plus".
-- thanks: expressions of gratitude such as "merci".
-- small_talk: casual conversation such as "ça va ?".
+- greeting: salutations.
+- farewell: goodbyes.
+- thanks: expressions of gratitude.
+- small_talk: casual conversation.
 - capabilities: questions about what the assistant can do.
 - create_task: requests to create/add/remind a task.
 - create_event: requests to schedule/create an appointment or event.
@@ -154,15 +170,18 @@ Supported intents:
 - summarize_period: requests for tasks/events/planning summaries.
 - unrecognized: genuinely off-topic requests, gibberish, or messages whose intended action cannot reasonably be determined.
 
-For valid but informal requests, prefer the closest supported intent and give a confidence of at least 0.7 when the meaning is reasonably clear. Give confidence below 0.6 only when the intent is genuinely unclear. Always call classify_intent.
+For valid but informal requests, prefer the closest supported intent. Use confidence below 0.6 only when the intent is genuinely unclear. Always call classify_intent.
 
-Examples:
+Representative examples:
+${patternGuidance}
+
+Additional examples:
+- "aide moi" -> capabilities
+- "il fait combien dehors" -> unrecognized
 - "n'oublie pas d'appeler sam" -> create_task
 - "mets moi un rdv demain avec sara" -> create_event
 - "supprime le truc appeler le fournisseur" -> delete_task
 - "qu'est-ce que j'ai cette semaine" -> summarize_period
-- "aide moi" -> capabilities
-- "il fait combien dehors" -> unrecognized
 `,
       },
       { role: "user", content: inputText },
@@ -172,17 +191,30 @@ Examples:
   });
 
   const toolCall = completion.choices[0]?.message?.tool_calls?.[0];
-
   if (!toolCall) return { intent: "unrecognized", confidence: 0 };
 
   try {
     const args = JSON.parse(toolCall.function.arguments) as IntentResult;
-    const confidence = Math.max(0, Math.min(1, Number(args.confidence)));
-    if (!Number.isFinite(confidence) || confidence < INTENT_CONFIDENCE_THRESHOLD) {
-      return { intent: "unrecognized", language: args.language, confidence: Number.isFinite(confidence) ? confidence : 0 };
-    }
-    return { ...args, confidence };
+    return { ...args, confidence: normalizeConfidence(args.confidence) };
   } catch {
     return { intent: "unrecognized", confidence: 0 };
   }
+}
+
+export async function detectIntent(
+  inputText: string,
+  confidenceThreshold = DEFAULT_INTENT_CONFIDENCE_THRESHOLD,
+): Promise<IntentResult> {
+  const result = await classifyIntent(inputText);
+  const confidence = normalizeConfidence(result.confidence);
+
+  if (confidence < confidenceThreshold) {
+    return {
+      intent: "unrecognized",
+      language: result.language,
+      confidence,
+    };
+  }
+
+  return { ...result, confidence };
 }
