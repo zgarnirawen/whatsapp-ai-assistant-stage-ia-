@@ -137,7 +137,3 @@ export const INTENT_PATTERNS: readonly IntentPatternSet[] = [
 export const ALL_INTENT_EXAMPLES = INTENT_PATTERNS.flatMap(({ intent, examples }) =>
   examples.map((input) => ({ input, expectedIntent: intent })),
 );
-
-export const INTENT_PATTERN_SUMMARY = INTENT_PATTERNS
-  .map(({ intent, examples }) => `${intent}: ${examples.join(" | ")}`)
-  .join("\n");
