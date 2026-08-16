@@ -5,7 +5,7 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "test": "tsx src/services/intentFallbackCheck.ts && tsx src/services/conversationFallbackCheck.ts",
+    "test": "tsx src/services/intentFallbackCheck.ts && tsx src/services/conversationFallbackCheck.ts && tsx src/services/actionEntityRegressionCheck.ts",
     "test:e2e": "tsx tests/e2e.ts",
     "test:all": "npm test && npm run test:e2e",
     "dev": "tsx watch src/index.ts",
