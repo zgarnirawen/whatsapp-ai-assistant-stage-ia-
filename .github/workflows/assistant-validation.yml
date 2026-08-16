@@ -5,6 +5,7 @@ on:
     paths:
       - "backend/**"
       - "docs/e2e-test-plan-4180.md"
+      - "docs/speech-to-text-test-plan-4176.md"
       - ".github/workflows/assistant-validation.yml"
   workflow_dispatch:
 
@@ -28,6 +29,8 @@ jobs:
         run: npx tsx src/services/fallbackRegressionCheck.ts
       - name: Run offline intent recognition regression suite
         run: npx tsx src/services/intentRecognitionRegressionCheck.ts
+      - name: Validate speech-to-text integration contract
+        run: npx tsx src/services/speechToTextValidationCheck.ts
       - name: Upload validation reports
         if: always()
         uses: actions/upload-artifact@v5
