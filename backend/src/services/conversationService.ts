@@ -1,7 +1,6 @@
 import Groq from "groq-sdk";
 import type { DetectedIntent, IntentResult } from "./intentDetection.js";
 
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 const MODEL = process.env.GROQ_CHAT_MODEL || "llama-3.3-70b-versatile";
 const REQUEST_TIMEOUT_MS = 10_000;
 
@@ -64,6 +63,7 @@ export async function generateConversationalResponse(
   });
 
   try {
+    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
     const completion = await Promise.race([
       groq.chat.completions.create({
         model: MODEL,
